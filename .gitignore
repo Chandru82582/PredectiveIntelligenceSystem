@@ -1,2 +1,3 @@
 *.csv
 milano-grid.geojson
+__pycache__
