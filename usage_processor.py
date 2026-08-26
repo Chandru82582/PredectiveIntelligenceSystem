@@ -606,7 +606,7 @@ class UsageProcessor:
                     f"Failed to compute KPIs: {exc}"
                 ) from exc
     
-    def export_summary(self, output_dir="."):
+    def export_summary(self, output_dir=".\\report"):
         """
         Export daily and grid-level summaries.
 
@@ -674,10 +674,28 @@ class UsageProcessor:
                 )
             )
 
-            daily_path = (
-                output_dir /
-                "daily_summary.csv"
-            )
+            # daily_path = (
+            #     output_dir /
+            #     "daily_summary.csv"
+            # )
+
+            # daily_summary.to_csv(
+            #     daily_path,
+            #     index=False
+            # )
+
+            # self.logger.info(
+            #     "Daily summary exported: %s",
+            #     daily_path
+            # )
+
+            # daily_files = list(output_dir.glob("daily_summary_*.csv"))
+
+            # counter = len(daily_files) + 1
+
+            date = self.analytics_df["hour_timestamp"].dt.date.loc[0]
+
+            daily_path = output_dir / f"daily_summary_{date}.csv"
 
             daily_summary.to_csv(
                 daily_path,
@@ -720,10 +738,9 @@ class UsageProcessor:
                 )
             )
 
-            grid_path = (
-                output_dir /
-                "grid_summary.csv"
-            )
+            # date = self.analytics_df["hour_timestamp"].dt.date.loc[0]
+            
+            grid_path = output_dir / f"grid_summary_{date}.csv"
 
             grid_summary.to_csv(
                 grid_path,
