@@ -2,7 +2,7 @@ import logging
 from pathlib import Path
 
 import pandas as pd
-
+import os
 
 class UsageProcessor:
     """
@@ -64,10 +64,31 @@ class UsageProcessor:
 
         self.null_activity_count = {}
 
-        self.logger = logger or logging.getLogger(
-            self.__class__.__name__
-        )
+        if logger:
+            self.logger = logger
+        else:
+            self.logger = logging.getLogger(self.__class__.__name__)
+            self.logger.setLevel(logging.INFO)
 
+            if not self.logger.handlers:
+                # Create logs directory
+
+                log_dir = Path("logs")
+                log_dir.mkdir(parents=True, exist_ok=True)
+                log_file = log_dir / "usage_processor.log"
+                
+                file_handler = logging.FileHandler(
+                        log_file,
+                        mode="a",
+                        encoding="utf-8"
+                        )
+
+                formatter = logging.Formatter(
+                    "%(asctime)s | %(name)s | %(levelname)s | %(message)s"
+                )
+
+                file_handler.setFormatter(formatter)
+                self.logger.addHandler(file_handler)
     # ---------------------------------------------------------
     # 1. LOAD DATA
     # ---------------------------------------------------------
