@@ -6,3 +6,4 @@ activity_alerts_*.json
 *.parquet
 *.crc
 cleaner_spark_test.py
+_SUCCESS
