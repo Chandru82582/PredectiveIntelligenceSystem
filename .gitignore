@@ -3,3 +3,6 @@ milano-grid.geojson
 __pycache__
 *.log
 activity_alerts_*.json
+*.parquet
+*.crc
+cleaner_spark_test.py
