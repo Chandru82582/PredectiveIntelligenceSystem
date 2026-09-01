@@ -81,7 +81,6 @@ class TelecomPipeline:
         self.spark: Optional[SparkSession] = None
 
     def _configure_logger(self) -> logging.Logger:
-        """Configures multi-handler logger for console and file output."""
         self.log_dir.mkdir(parents=True, exist_ok=True)
         log_file = self.log_dir / "telecom_pipeline.log"
 
@@ -108,11 +107,12 @@ class TelecomPipeline:
         return logger
 
     def create_spark_session(self) -> SparkSession:
-        """Initializes SparkSession with dynamic partition overwrite and memory controls."""
         hadoop_home = os.getenv("HADOOP_HOME")
-        if hadoop_home:
+        if hadoop_home and os.path.exists(hadoop_home):
             os.environ["HADOOP_HOME"] = hadoop_home
-            os.environ["PATH"] = os.environ["PATH"] + os.pathsep + os.path.join(hadoop_home, "bin")
+            hadoop_bin = os.path.join(hadoop_home, "bin")
+            if os.path.exists(hadoop_bin):
+                os.environ["PATH"] = os.environ["PATH"] + os.pathsep + hadoop_bin
 
         self.spark = (
             SparkSession.builder
@@ -120,7 +120,8 @@ class TelecomPipeline:
             .master("local[*]")
             .config("spark.sql.sources.partitionOverwriteMode", "dynamic")
             .config("spark.sql.shuffle.partitions", "8")
-            .config("spark.driver.memory", "8g")
+            .config("spark.driver.memory", "4g")
+            .config("spark.driver.maxResultSize", "2g")
             .config("spark.sql.execution.arrow.pyspark.enabled", "true")
             .getOrCreate()
         )
@@ -128,10 +129,6 @@ class TelecomPipeline:
         return self.spark
 
     def read_raw(self, input_path: Optional[str] = None) -> DataFrame:
-        """
-        Reads raw CSV files with explicit schema, verifies file existence,
-        and fails cleanly and loudly if no files are discovered.
-        """
         if self.spark is None:
             self.create_spark_session()
 
@@ -189,10 +186,6 @@ class TelecomPipeline:
         self,
         df: DataFrame
     ) -> Tuple[DataFrame, DataFrame, Dict[str, Any]]:
-        """
-        Validates quality rules, isolates quarantined records, fills nulls,
-        and computes derived features.
-        """
         self.logger.info("Executing data quality checks and quarantine isolation...")
 
         df_with_date = df.withColumn(
@@ -254,12 +247,6 @@ class TelecomPipeline:
         return clean_df, quarantine_df, metrics
 
     def aggregate(self, clean_df: DataFrame) -> Dict[str, DataFrame]:
-        """
-        Builds analytical aggregations:
-          1. hourly_grid_summary: 1 record per (date, hour, grid_id)
-          2. daily_summary: Overall daily activity
-          3. grid_summary: Aggregated coverage by grid and date
-        """
         self.logger.info("Computing multi-dimensional summary aggregations...")
 
         hourly_grid_summary = (
@@ -312,10 +299,6 @@ class TelecomPipeline:
         hourly_df: DataFrame,
         reference_path: Optional[str] = None
     ) -> Tuple[DataFrame, DataFrame]:
-        """
-        Loads spatial dimension reference and enriches hourly metrics
-        using a broadcast join.
-        """
         ref_path = Path(reference_path).resolve() if reference_path else self.reference_path
         self.logger.info("Loading spatial reference from: %s", ref_path)
 
@@ -362,10 +345,6 @@ class TelecomPipeline:
         datasets: Dict[str, DataFrame],
         output_dir: Optional[str] = None
     ) -> Dict[str, int]:
-        """
-        Persists datasets to Parquet format segregated by date partitions.
-        Returns total row counts per output table.
-        """
         out_base = Path(output_dir).resolve() if output_dir else self.output_path
         out_base.mkdir(parents=True, exist_ok=True)
         self.logger.info("Writing pipeline artifacts to base directory: %s", out_base)
@@ -400,7 +379,6 @@ class TelecomPipeline:
         return row_counts
 
     def run(self) -> Dict[str, Any]:
-        """Orchestrates pipeline execution with execution metrics and status logging."""
         start_time = datetime.now()
         start_perf = time.perf_counter()
 
@@ -419,15 +397,11 @@ class TelecomPipeline:
         output_rows_summary = {}
 
         try:
-            # Step 1: Initialize Spark Session
             self.create_spark_session()
-
-            # Step 2: Read raw CSVs (fails cleanly & loudly if absent)
             raw_df = self.read_raw()
             total_input_rows = raw_df.count()
             self.logger.info("Total raw rows loaded: %d", total_input_rows)
 
-            # Step 3: Clean, quarantine, handle nulls, and derive features
             clean_df, quarantine_df, quality_metrics = self.clean(raw_df)
             total_rejected_rows = quarantine_df.count()
             total_nulls_handled = quality_metrics["nulls_handled"]
@@ -437,15 +411,12 @@ class TelecomPipeline:
             self.logger.info("  - Rejected rows   : %d", total_rejected_rows)
             self.logger.info("  - Nulls handled   : %d", total_nulls_handled)
 
-            # Step 4: Analytical Aggregations
             aggregates = self.aggregate(clean_df)
 
-            # Step 5: Spatial Enrichment
             enriched_hourly_df, grid_ref_df = self.enrich(
                 hourly_df=aggregates["hourly_grid_summary"]
             )
 
-            # Step 6: Write segregated Parquet partitions
             datasets_to_write = {
                 "curated_usage": clean_df,
                 "quarantine": quarantine_df,
@@ -495,9 +466,7 @@ class TelecomPipeline:
             "duration_seconds": duration_sec,
         }
 
-
 def main():
-    """CLI entrypoint for running the Telecom Pipeline."""
     parser = argparse.ArgumentParser(
         description="Production Telecom Usage Pipeline (ETL & Spatial Enrichment)"
     )
@@ -539,7 +508,6 @@ def main():
         pipeline.run()
     except Exception:
         sys.exit(1)
-
 
 if __name__ == "__main__":
     main()

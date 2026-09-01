@@ -10,40 +10,36 @@ from typing import Any, Dict, List
 
 import pendulum
 from dotenv import load_dotenv
+from airflow.decorators import dag, task
+from airflow.sensors.python import PythonSensor
 
 # Setup logging
 logger = logging.getLogger(__name__)
 
+# --- FIX 1: Correctly resolve Project Root for Imports based on image_b768a5.png ---
+# __file__ is flow/airflow_home/dags/ingestion_dag.py
+# .parent.parent.parent navigates up to the 'flow/' directory
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
-# Add sql_ingestion to path for MySQL ingestion module
-PROJECT_ROOT = Path(__file__).parent.parent.parent  # Go up to project root
-SQL_INGESTION_PATH = PROJECT_ROOT / "sql_ingestion"
-if str(SQL_INGESTION_PATH) not in sys.path:
-    sys.path.insert(0, str(SQL_INGESTION_PATH))
+# Now import the modules
+from spark.telecom_pipeline import TelecomPipeline
+from sql_ingestion.mysql_ingestion import MySQLDataIngestion
+# -----------------------------------------------------------------------------------
 
-# Now import the module
-from mysql_ingestion import MySQLDataIngestion
-
-from airflow.decorators import dag, task
-from airflow.sensors.python import PythonSensor
-
-from spark.telecom_pipeline import TelecomPipeline  # noqa: E402
-
-    
-load_dotenv(".env.airflow")
+# --- FIX 2: Absolute path for dotenv ---
+env_path = PROJECT_ROOT / ".env.airflow"
+load_dotenv(dotenv_path=env_path)
 
 FILE_GLOB_PATTERN = "sms-call-internet-mi-*.csv"
 
-# print("AIRFLOW_HOME:", os.environ["AIRFLOW_HOME"])
-
-
 def _get_path(env_var: str, default_val: str) -> Path:
-    """Translate a Windows path (D:\\...) to its WSL equivalent (/mnt/d/...) when running on Linux."""
+    """Translate a Windows path (D:\...) to its WSL equivalent (/mnt/d/...) when running on Linux."""
     val = os.getenv(env_var, default_val)
     if sys.platform == "linux" and val[:2].lower() == "d:":
         val = "/mnt/d/" + val[2:].lstrip("\\/").replace("\\", "/")
     return Path(val)
-
 
 LANDING_PATH = _get_path("LANDING_PATH", "d:/PredectiveIntelligenceSystem/flow/data/landing")
 PROCESSING_PATH = _get_path("PROCESSING_PATH", "d:/PredectiveIntelligenceSystem/flow/data/processing")
@@ -55,37 +51,24 @@ AUDIT_LOG_PATH = LOG_DIR / "audit_log.json"
 REFERENCE_PATH = _get_path("REFERENCE_PATH", "d:/PredectiveIntelligenceSystem/flow/data/reference")
 os.environ["AIRFLOW_HOME"] = _get_path("AIRFLOW_HOME", "d:/PredectiveIntelligenceSystem/flow/airflow_home").as_posix()
 
-
-# Create every working directory at DAG *parse* time so the sensor is never
-# watching a path that doesn't exist yet.
 for _p in (LANDING_PATH, PROCESSING_PATH, RAW_PATH, REJECTED_PATH, STAGING_PATH, LOG_DIR):
     _p.mkdir(parents=True, exist_ok=True)
 
-
 def _files_waiting() -> bool:
-    """
-    Check if CSV files are present in the landing directory.
-    Used by the PythonSensor to trigger the pipeline when data arrives.
-    """
     pattern = str(LANDING_PATH / FILE_GLOB_PATTERN)
     matches = glob.glob(pattern)
     file_count = len(matches)
     print(f"[sensor] polling {pattern}")
     print(f"[sensor] -> {file_count} file(s) found")
     if file_count > 0:
-        print(f"[sensor] Data detected! Proceeding with pipeline...")
+        print("[sensor] Data detected! Proceeding with pipeline...")
         for f in matches:
-            print(f"[sensor]   - {Path(f).name}")
+            print(f"[sensor]    - {Path(f).name}")
     else:
-        print(f"[sensor] No data in landing zone. Will check again in 5 minutes...")
+        print("[sensor] No data in landing zone. Will check again in 5 minutes...")
     return file_count > 0
 
-
 def _new_pipeline() -> TelecomPipeline:
-    """Every task below runs in its own process, so each gets its own
-    TelecomPipeline + SparkSession. This is the trade-off for having
-    ingest/validate/spark_process show up as distinct, inspectable steps
-    instead of one long black-box task."""
     pipeline = TelecomPipeline(
         input_path=str(LANDING_PATH),
         output_path=str(RAW_PATH / "processed_parquet"),
@@ -95,16 +78,11 @@ def _new_pipeline() -> TelecomPipeline:
     pipeline.create_spark_session()
     return pipeline
 
-
 def _append_audit(entry: Dict[str, Any]) -> None:
     with open(AUDIT_LOG_PATH, "a") as f:
         f.write(json.dumps(entry) + "\n")
 
-
 def _reject_now(file_path: Path, reason: str, row_count: int = 0) -> None:
-    """Used when a file fails before it ever reaches spark_process — move it
-    straight to rejected/ and log why, rather than dragging a dead file
-    through the rest of the pipeline."""
     target = REJECTED_PATH / file_path.name
     if target.exists():
         target.unlink()
@@ -117,7 +95,6 @@ def _reject_now(file_path: Path, reason: str, row_count: int = 0) -> None:
         "processed_at": datetime.now().isoformat(),
     })
 
-
 def _staging_dirs(file_stem: str) -> Dict[str, Path]:
     return {
         "raw": STAGING_PATH / "raw" / file_stem,
@@ -125,14 +102,10 @@ def _staging_dirs(file_stem: str) -> Dict[str, Path]:
         "quarantine": STAGING_PATH / "quarantine" / file_stem,
     }
 
-
 @dag(
     dag_id="telecom_landing_ingestion",
     description="Watches the landing zone for Milano telecom CSVs; ingest -> validate -> spark_process.",
     schedule="@hourly",
-    # FIX: start_date must be safely in the past, not "now". With catchup=False,
-    # this makes Airflow run the most recent interval immediately on unpause,
-    # instead of waiting a full hour for the first interval to complete.
     start_date=pendulum.datetime(2024, 1, 1, tz="UTC"),
     catchup=False,
     max_active_runs=1,
@@ -148,18 +121,14 @@ def telecom_landing_ingestion():
     wait_for_files = PythonSensor(
         task_id="wait_for_milano_files",
         python_callable=_files_waiting,
-        poke_interval=300,  # Check every 5 minutes (300 seconds)
-        timeout=60 * 60 * 24,  # Give up after 24 hours
-        mode="reschedule",  # frees the worker slot between pokes
-        soft_fail=False,    # fail explicitly if timeout reached
+        poke_interval=300,
+        timeout=60 * 60 * 24,
+        mode="reschedule",
+        soft_fail=False,
         pool="default_pool",
         pool_slots=1
     )
 
-    # ----------------------------------------------------------------- #
-    # STAGE 1: ingest — move each file out of landing/, read it with
-    # Spark, and checkpoint the raw DataFrame to staging parquet.
-    # ----------------------------------------------------------------- #
     @task
     def ingest() -> List[Dict[str, Any]]:
         pattern = str(LANDING_PATH / FILE_GLOB_PATTERN)
@@ -174,7 +143,6 @@ def telecom_landing_ingestion():
         try:
             for src in discovered:
                 src_path = Path(src)
-                # Move immediately so a re-poke can't pick the same file up twice.
                 held_path = PROCESSING_PATH / src_path.name
                 if held_path.exists():
                     held_path.unlink()
@@ -210,10 +178,6 @@ def telecom_landing_ingestion():
 
         return results
 
-    # ----------------------------------------------------------------- #
-    # STAGE 2: validate — reload staged raw data, run quality rules,
-    # split into clean/quarantine, checkpoint clean data to staging.
-    # ----------------------------------------------------------------- #
     @task
     def validate(ingest_results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         pending = [r for r in ingest_results if r.get("status") == "INGESTED"]
@@ -275,11 +239,6 @@ def telecom_landing_ingestion():
 
         return results
 
-    # ----------------------------------------------------------------- #
-    # STAGE 3: spark_process — aggregate + spatial enrichment + final
-    # warehouse write, then move the original file to raw/, audit, and
-    # clean up this file's staging artifacts.
-    # ----------------------------------------------------------------- #
     @task
     def spark_process(validate_results: List[Dict[str, Any]]) -> Dict[str, List[str]]:
         pending = [r for r in validate_results if r.get("status") == "VALIDATED"]
@@ -340,7 +299,6 @@ def telecom_landing_ingestion():
                     summary["errors"].append(filename)
 
                 finally:
-                    # Best-effort staging cleanup for this file.
                     for stage_dir in _staging_dirs(Path(filename).stem).values():
                         shutil.rmtree(stage_dir, ignore_errors=True)
         finally:
@@ -349,28 +307,19 @@ def telecom_landing_ingestion():
         print(f"[spark_process] batch summary: {summary}")
         return summary
 
-    # ----------------------------------------------------------------- #
-    # STAGE 4: mysql_ingest — Load processed data from Spark outputs
-    # into MySQL analytical tables (curated_usage, hourly_grid_summary,
-    # daily_summary, etc.). This task depends on successful completion
-    # of spark_process.
-    # ----------------------------------------------------------------- #
     @task
     def mysql_ingest(spark_summary: dict) -> dict:
-        """Load Spark parquet outputs to MySQL database."""
         try:
             logger.info("[mysql_ingest] Starting MySQL ingestion...")
             
-            # Initialize MySQL connection
             ingestion = MySQLDataIngestion(
-                host='127.0.0.1',
+                host="192.168.160.1",
                 user='root',
                 password='root',
-                database='TelecomActivity',
+                database='telecom_Activity',
                 port=3306
             )
             
-            # Define parquet output directories (from spark_process writes)
             output_base = RAW_PATH / "processed_parquet"
             parquet_dirs = {
                 'curated_usage': output_base / 'curated_usage',
@@ -383,7 +332,6 @@ def telecom_landing_ingestion():
             
             logger.info(f"[mysql_ingest] Parquet base path: {output_base}")
             
-            # Verify paths exist
             existing_dirs = {
                 k: v for k, v in parquet_dirs.items() 
                 if v.exists()
@@ -399,16 +347,14 @@ def telecom_landing_ingestion():
             
             logger.info(f"[mysql_ingest] Found {len(existing_dirs)} directories to ingest")
             
-            # Perform ingestion
-            stats = ingestion.ingest_from_parquet(existing_dirs, batch_size=1000)
-            
+            stats = ingestion.ingest_from_parquet(existing_dirs, batch_size=10000)
             logger.info(f"[mysql_ingest] Ingestion completed: {stats}")
             
             return {
                 "status": "SUCCESS",
                 "tables_ingested": list(existing_dirs.keys()),
-                "total_rows": sum(stats.get(table, {}).get('rows', 0) 
-                                 for table in existing_dirs.keys()),
+                "total_rows": sum(stats.get(table, 0) 
+                  for table in existing_dirs.keys()),
                 "stats": stats
             }
             
@@ -416,11 +362,6 @@ def telecom_landing_ingestion():
             logger.error(f"[mysql_ingest] Error during ingestion: {str(e)}", exc_info=True)
             raise
 
-    # ----------------------------------------------------------------- #
-    # Task Dependencies and DAG Flow
-    # ----------------------------------------------------------------- #
-    # Flow: wait_for_files -> ingest -> validate -> spark_process -> mysql_ingest
-    # ----------------------------------------------------------------- #
     ingest_results = ingest()
     validate_results = validate(ingest_results)
     process_summary = spark_process(validate_results)
@@ -430,6 +371,5 @@ def telecom_landing_ingestion():
     ingest_results >> validate_results
     validate_results >> process_summary
     process_summary >> ingest_summary
-
 
 telecom_landing_ingestion()

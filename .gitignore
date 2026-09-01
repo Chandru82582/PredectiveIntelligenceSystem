@@ -14,5 +14,6 @@ standalone_admin_password.txt
 flow/airflow_home/webserver_config.py
 /readme
 inspect_data.py
-
-
+flow/airflow_home/airflow-webserver.pid
+flow/logs/audit_log.json
+flow/airflow_home/logs

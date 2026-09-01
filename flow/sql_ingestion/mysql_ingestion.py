@@ -25,7 +25,7 @@ class MySQLConnectionPool:
     
     def __init__(
         self,
-        host: str = 'localhost',
+        host: str = '192.168.160.1',
         user: str = 'root',
         password: str = '',
         database: str = 'telecom_analytics',
@@ -35,20 +35,6 @@ class MySQLConnectionPool:
         use_sqlite: bool = False,
         sqlite_path: str = None
     ):
-        """
-        Initialize connection pool.
-        
-        Args:
-            host: MySQL host
-            user: MySQL user
-            password: MySQL password
-            database: Database name
-            port: MySQL port
-            pool_name: Name for the connection pool
-            pool_size: Number of connections in pool
-            use_sqlite: If True, use SQLite instead of MySQL
-            sqlite_path: Path to SQLite database file
-        """
         self.host = host
         self.user = user
         self.password = password
@@ -78,7 +64,6 @@ class MySQLConnectionPool:
     
     @contextmanager
     def get_connection(self):
-        """Context manager for database connections."""
         conn = None
         try:
             if self.use_sqlite:
@@ -110,18 +95,11 @@ class MySQLDataIngestion:
         host: str = '127.0.0.1',
         user: str = 'root',
         password: str = 'root',
-        database: str = 'TelecomActivity',
+        database: str = 'telecom_activity',
         port: int = 3306,
         use_sqlite: bool = False,
         sqlite_path: str = None
     ):
-        """
-        Initialize MySQL ingestion handler.
-        
-        Connection String: jdbc:mysql://127.0.0.1:3306/TelecomActivity
-        Username: root
-        Password: root
-        """
         self.pool = MySQLConnectionPool(
             host=host,
             user=user,
@@ -138,24 +116,6 @@ class MySQLDataIngestion:
         parquet_dirs: Dict[str, Path],
         batch_size: int = 1000
     ) -> Dict[str, Any]:
-        """
-        Ingest processed data from Spark parquet outputs.
-        
-        Args:
-            parquet_dirs: Dictionary of parquet directory paths:
-                {
-                    'curated_usage': Path,
-                    'quarantine': Path,
-                    'hourly_grid_summary': Path,
-                    'daily_summary': Path,
-                    'grid_summary': Path,
-                    'enriched_spatial_hourly': Path
-                }
-            batch_size: Number of rows per batch insert
-            
-        Returns:
-            Dictionary with ingestion statistics
-        """
         try:
             import pandas as pd
         except ImportError:
@@ -176,7 +136,6 @@ class MySQLDataIngestion:
             'errors': []
         }
         
-        # Define table mappings
         table_mappings = {
             'curated_usage': ('curated_usage', self._insert_curated_usage),
             'quarantine': ('quarantine', self._insert_quarantine),
@@ -201,10 +160,8 @@ class MySQLDataIngestion:
                     stats[dataset_key] = 0
                     continue
                 
-                # Normalize column names
                 df.columns = df.columns.str.lower()
                 
-                # Insert using batch processing
                 rows_inserted = 0
                 for i in range(0, len(df), batch_size):
                     batch = df.iloc[i:i + batch_size]
@@ -235,7 +192,11 @@ class MySQLDataIngestion:
         return stats
     
     def _insert_curated_usage(self, batch: 'pd.DataFrame') -> int:
-        """Insert curated (clean) usage data."""
+        """Insert curated (clean) usage data using bulk operations."""
+        # Clean NaNs to None for SQL compatibility
+        batch = batch.where(pd.notnull(batch), None)
+        records = batch.to_dict('records')
+        
         with self.pool.get_connection() as conn:
             cursor = conn.cursor() if not self.use_sqlite else conn
             
@@ -253,31 +214,36 @@ class MySQLDataIngestion:
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             '''
             
-            for _, row in batch.iterrows():
-                values = (
+            values = [
+                (
                     row.get('timestamp'),
-                    int(row.get('grid_id', 0)),
+                    int(row.get('grid_id') or 0),
                     row.get('country_code'),
-                    float(row.get('sms_in_count', 0)),
-                    float(row.get('sms_out_count', 0)),
-                    float(row.get('call_in_count', 0)),
-                    float(row.get('call_out_count', 0)),
-                    float(row.get('internet_usage', 0)),
+                    float(row.get('sms_in_count') or 0.0),
+                    float(row.get('sms_out_count') or 0.0),
+                    float(row.get('call_in_count') or 0.0),
+                    float(row.get('call_out_count') or 0.0),
+                    float(row.get('internet_usage') or 0.0),
                     row.get('date'),
-                    int(row.get('hour', 0)),
-                    int(row.get('day_of_week', 0)),
-                    float(row.get('total_sms', 0)),
-                    float(row.get('total_calls', 0)),
-                    float(row.get('total_activity', 0))
+                    int(row.get('hour') or 0),
+                    int(row.get('day_of_week') or 0),
+                    float(row.get('total_sms') or 0.0),
+                    float(row.get('total_calls') or 0.0),
+                    float(row.get('total_activity') or 0.0)
                 )
-                cursor.execute(sql, values)
+                for row in records
+            ]
+            cursor.executemany(sql, values)
             
             conn.commit()
         
         return len(batch)
     
     def _insert_quarantine(self, batch: 'pd.DataFrame') -> int:
-        """Insert quarantined (rejected) data."""
+        """Insert quarantined (rejected) data using bulk operations."""
+        batch = batch.where(pd.notnull(batch), None)
+        records = batch.to_dict('records')
+        
         with self.pool.get_connection() as conn:
             cursor = conn.cursor() if not self.use_sqlite else conn
             
@@ -295,27 +261,32 @@ class MySQLDataIngestion:
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             '''
             
-            for _, row in batch.iterrows():
-                values = (
+            values = [
+                (
                     row.get('timestamp'),
                     row.get('grid_id'),
                     row.get('country_code'),
-                    float(row.get('sms_in_count', 0)),
-                    float(row.get('sms_out_count', 0)),
-                    float(row.get('call_in_count', 0)),
-                    float(row.get('call_out_count', 0)),
-                    float(row.get('internet_usage', 0)),
+                    float(row.get('sms_in_count') or 0.0),
+                    float(row.get('sms_out_count') or 0.0),
+                    float(row.get('call_in_count') or 0.0),
+                    float(row.get('call_out_count') or 0.0),
+                    float(row.get('internet_usage') or 0.0),
                     row.get('date'),
-                    row.get('quarantine_reason', 'UNKNOWN')
+                    row.get('quarantine_reason', 'UNKNOWN') or 'UNKNOWN'
                 )
-                cursor.execute(sql, values)
+                for row in records
+            ]
+            cursor.executemany(sql, values)
             
             conn.commit()
         
         return len(batch)
     
     def _insert_hourly_grid_summary(self, batch: 'pd.DataFrame') -> int:
-        """Insert hourly grid summary aggregates."""
+        """Insert hourly grid summary aggregates using bulk operations."""
+        batch = batch.where(pd.notnull(batch), None)
+        records = batch.to_dict('records')
+        
         with self.pool.get_connection() as conn:
             cursor = conn.cursor() if not self.use_sqlite else conn
             
@@ -331,27 +302,32 @@ class MySQLDataIngestion:
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             '''
             
-            for _, row in batch.iterrows():
-                values = (
+            values = [
+                (
                     row.get('date'),
-                    int(row.get('hour', 0)),
-                    int(row.get('grid_id', 0)),
-                    float(row.get('sms_in', 0)),
-                    float(row.get('sms_out', 0)),
-                    float(row.get('call_in', 0)),
-                    float(row.get('call_out', 0)),
-                    float(row.get('internet_activity', 0)),
-                    float(row.get('total_activity', 0)),
-                    int(row.get('record_count', 0))
+                    int(row.get('hour') or 0),
+                    int(row.get('grid_id') or 0),
+                    float(row.get('sms_in') or 0.0),
+                    float(row.get('sms_out') or 0.0),
+                    float(row.get('call_in') or 0.0),
+                    float(row.get('call_out') or 0.0),
+                    float(row.get('internet_activity') or 0.0),
+                    float(row.get('total_activity') or 0.0),
+                    int(row.get('record_count') or 0)
                 )
-                cursor.execute(sql, values)
+                for row in records
+            ]
+            cursor.executemany(sql, values)
             
             conn.commit()
         
         return len(batch)
     
     def _insert_daily_summary(self, batch: 'pd.DataFrame') -> int:
-        """Insert daily summary aggregates."""
+        """Insert daily summary aggregates using bulk operations."""
+        batch = batch.where(pd.notnull(batch), None)
+        records = batch.to_dict('records')
+        
         with self.pool.get_connection() as conn:
             cursor = conn.cursor() if not self.use_sqlite else conn
             
@@ -367,24 +343,29 @@ class MySQLDataIngestion:
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
             '''
             
-            for _, row in batch.iterrows():
-                values = (
+            values = [
+                (
                     row.get('date'),
-                    float(row.get('total_sms', 0)),
-                    float(row.get('total_calls', 0)),
-                    float(row.get('internet_usage', 0)),
-                    float(row.get('total_activity', 0)),
-                    int(row.get('active_grids', 0)),
-                    int(row.get('total_records', 0))
+                    float(row.get('total_sms') or 0.0),
+                    float(row.get('total_calls') or 0.0),
+                    float(row.get('internet_usage') or 0.0),
+                    float(row.get('total_activity') or 0.0),
+                    int(row.get('active_grids') or 0),
+                    int(row.get('total_records') or 0)
                 )
-                cursor.execute(sql, values)
+                for row in records
+            ]
+            cursor.executemany(sql, values)
             
             conn.commit()
         
         return len(batch)
     
     def _insert_grid_summary(self, batch: 'pd.DataFrame') -> int:
-        """Insert grid-level summary aggregates."""
+        """Insert grid-level summary aggregates using bulk operations."""
+        batch = batch.where(pd.notnull(batch), None)
+        records = batch.to_dict('records')
+        
         with self.pool.get_connection() as conn:
             cursor = conn.cursor() if not self.use_sqlite else conn
             
@@ -400,24 +381,29 @@ class MySQLDataIngestion:
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
             '''
             
-            for _, row in batch.iterrows():
-                values = (
+            values = [
+                (
                     row.get('date'),
-                    int(row.get('grid_id', 0)),
-                    float(row.get('total_sms', 0)),
-                    float(row.get('total_calls', 0)),
-                    float(row.get('internet_usage', 0)),
-                    float(row.get('total_activity', 0)),
-                    int(row.get('active_hours', 0))
+                    int(row.get('grid_id') or 0),
+                    float(row.get('total_sms') or 0.0),
+                    float(row.get('total_calls') or 0.0),
+                    float(row.get('internet_usage') or 0.0),
+                    float(row.get('total_activity') or 0.0),
+                    int(row.get('active_hours') or 0)
                 )
-                cursor.execute(sql, values)
+                for row in records
+            ]
+            cursor.executemany(sql, values)
             
             conn.commit()
         
         return len(batch)
     
     def _insert_enriched_spatial(self, batch: 'pd.DataFrame') -> int:
-        """Insert spatially enriched data with geometry references."""
+        """Insert spatially enriched data using bulk operations."""
+        batch = batch.where(pd.notnull(batch), None)
+        records = batch.to_dict('records')
+        
         with self.pool.get_connection() as conn:
             cursor = conn.cursor() if not self.use_sqlite else conn
             
@@ -433,25 +419,26 @@ class MySQLDataIngestion:
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             '''
             
-            for _, row in batch.iterrows():
-                values = (
+            values = [
+                (
                     row.get('date'),
-                    int(row.get('hour', 0)),
-                    int(row.get('grid_id', 0)),
-                    float(row.get('sms_in', 0)),
-                    float(row.get('sms_out', 0)),
-                    float(row.get('call_in', 0)),
-                    float(row.get('call_out', 0)),
-                    float(row.get('internet_activity', 0)),
-                    float(row.get('total_activity', 0)),
+                    int(row.get('hour') or 0),
+                    int(row.get('grid_id') or 0),
+                    float(row.get('sms_in') or 0.0),
+                    float(row.get('sms_out') or 0.0),
+                    float(row.get('call_in') or 0.0),
+                    float(row.get('call_out') or 0.0),
+                    float(row.get('internet_activity') or 0.0),
+                    float(row.get('total_activity') or 0.0),
                     row.get('geometry')  # Store as text
                 )
-                cursor.execute(sql, values)
+                for row in records
+            ]
+            cursor.executemany(sql, values)
             
             conn.commit()
         
         return len(batch)
-
 
 if __name__ == '__main__':
     import sys
