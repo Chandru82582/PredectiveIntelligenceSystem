@@ -7,3 +7,12 @@ activity_alerts_*.json
 *.crc
 cleaner_spark_test.py
 _SUCCESS
+flow/airflow_venv/
+airflow.cfg
+airflow.db
+standalone_admin_password.txt
+flow/airflow_home/webserver_config.py
+/readme
+inspect_data.py
+
+
