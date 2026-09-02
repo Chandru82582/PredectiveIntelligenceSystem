@@ -23,6 +23,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 # Import the PySpark pipeline
 from spark.telecom_pipeline import TelecomPipeline
+from sql_ingestion.insert_audit import backfill_audit_logs
 
 # --- Absolute path for dotenv ---
 env_path = PROJECT_ROOT / ".env.airflow"
@@ -320,6 +321,7 @@ def telecom_landing_ingestion():
                         "duration_seconds": duration,
                     })
                     summary["accepted"].append(filename)
+                    
 
                 except Exception as exc:
                     print(f"[spark_process] FAILED on {filename}: {exc}")
@@ -331,6 +333,7 @@ def telecom_landing_ingestion():
                         shutil.rmtree(stage_dir, ignore_errors=True)
         finally:
             pipeline.spark.stop()
+            backfill_audit_logs("/mnt/d/PredectiveIntelligenceSystem/flow/logs/audit_log.json",{"host": "localhost","user": "root","password": "root","database": "Telecom_Activity","port": 3306})
 
         return summary
 
