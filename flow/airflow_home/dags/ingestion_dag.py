@@ -16,19 +16,15 @@ from airflow.sensors.python import PythonSensor
 # Setup logging
 logger = logging.getLogger(__name__)
 
-# --- FIX 1: Correctly resolve Project Root for Imports based on image_b768a5.png ---
-# __file__ is flow/airflow_home/dags/ingestion_dag.py
-# .parent.parent.parent navigates up to the 'flow/' directory
+# --- Correctly resolve Project Root for Imports ---
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-# Now import the modules
+# Import the PySpark pipeline
 from spark.telecom_pipeline import TelecomPipeline
-from sql_ingestion.mysql_ingestion import MySQLDataIngestion
-# -----------------------------------------------------------------------------------
 
-# --- FIX 2: Absolute path for dotenv ---
+# --- Absolute path for dotenv ---
 env_path = PROJECT_ROOT / ".env.airflow"
 load_dotenv(dotenv_path=env_path)
 
@@ -263,15 +259,52 @@ def telecom_landing_ingestion():
                     aggregates = pipeline.aggregate(clean_df)
                     enriched_df, grid_ref_df = pipeline.enrich(aggregates["hourly_grid_summary"])
 
-                    pipeline.write_outputs(datasets={
+                    # Original DataFrames for Parquet writing (includes all metadata columns)
+                    datasets = {
                         "curated_usage": clean_df,
                         "quarantine": quarantine_df,
                         "hourly_grid_summary": aggregates["hourly_grid_summary"],
                         "daily_summary": aggregates["daily_summary"],
                         "grid_summary": aggregates["grid_summary"],
                         "enriched_spatial_hourly": enriched_df,
-                        "grid_reference": grid_ref_df,
-                    })
+                    }
+
+                    # Write to local Parquet for archival
+                    pipeline.write_outputs(datasets=datasets)
+                    pipeline.write_outputs({"grid_reference": grid_ref_df})
+
+                    # EXACT schema alignment for MySQL JDBC (Drop input_file_name, drop record_count from spatial, order columns)
+                    mysql_datasets = {
+                        "curated_usage": clean_df.select(
+                            "timestamp", "grid_id", "country_code", "sms_in_count", "sms_out_count", 
+                            "call_in_count", "call_out_count", "internet_usage", "date", "hour", 
+                            "day_of_week", "total_sms", "total_calls", "total_activity"
+                        ),
+                        "quarantine": quarantine_df.select(
+                            "timestamp", "grid_id", "country_code", "sms_in_count", "sms_out_count", 
+                            "call_in_count", "call_out_count", "internet_usage", "date", "quarantine_reason"
+                        ),
+                        "hourly_grid_summary": aggregates["hourly_grid_summary"].select(
+                            "date", "hour", "grid_id", "sms_in", "sms_out", "call_in", 
+                            "call_out", "internet_activity", "total_activity", "record_count"
+                        ),
+                        "daily_summary": aggregates["daily_summary"].select(
+                            "date", "total_sms", "total_calls", "internet_usage", 
+                            "total_activity", "active_grids", "total_records"
+                        ),
+                        "grid_summary": aggregates["grid_summary"].select(
+                            "date", "grid_id", "total_sms", "total_calls", 
+                            "internet_usage", "total_activity", "active_hours"
+                        ),
+                        "enriched_spatial_hourly": enriched_df.select(
+                            "date", "hour", "grid_id", "sms_in", "sms_out", 
+                            "call_in", "call_out", "internet_activity", "total_activity", "geometry"
+                        )
+                    }
+
+                    # High-speed push directly to MySQL
+                    for table_name, df in mysql_datasets.items():
+                        pipeline.write_to_mysql(df, table_name=table_name)
 
                     target = RAW_PATH / filename
                     if target.exists():
@@ -283,14 +316,9 @@ def telecom_landing_ingestion():
                         "filename": filename,
                         "status": "ACCEPTED",
                         "row_count": item["clean_rows"],
-                        "reason": (
-                            f"Processed successfully. clean={item['clean_rows']}, "
-                            f"rejected={item['rejected_rows']}, nulls_handled={item['nulls_handled']}"
-                        ),
                         "processed_at": datetime.now().isoformat(),
                         "duration_seconds": duration,
                     })
-                    print(f"[spark_process] {filename}: ACCEPTED in {duration:.2f}s")
                     summary["accepted"].append(filename)
 
                 except Exception as exc:
@@ -304,72 +332,13 @@ def telecom_landing_ingestion():
         finally:
             pipeline.spark.stop()
 
-        print(f"[spark_process] batch summary: {summary}")
         return summary
-
-    @task
-    def mysql_ingest(spark_summary: dict) -> dict:
-        try:
-            logger.info("[mysql_ingest] Starting MySQL ingestion...")
-            
-            ingestion = MySQLDataIngestion(
-                host="192.168.160.1",
-                user='root',
-                password='root',
-                database='telecom_Activity',
-                port=3306
-            )
-            
-            output_base = RAW_PATH / "processed_parquet"
-            parquet_dirs = {
-                'curated_usage': output_base / 'curated_usage',
-                'quarantine': output_base / 'quarantine',
-                'hourly_grid_summary': output_base / 'hourly_grid_summary',
-                'daily_summary': output_base / 'daily_summary',
-                'grid_summary': output_base / 'grid_summary',
-                'enriched_spatial_hourly': output_base / 'enriched_spatial_hourly',
-            }
-            
-            logger.info(f"[mysql_ingest] Parquet base path: {output_base}")
-            
-            existing_dirs = {
-                k: v for k, v in parquet_dirs.items() 
-                if v.exists()
-            }
-            
-            if not existing_dirs:
-                logger.warning("[mysql_ingest] No parquet output directories found")
-                return {
-                    "status": "WARNING",
-                    "reason": "No output directories found",
-                    "expected_path": str(output_base)
-                }
-            
-            logger.info(f"[mysql_ingest] Found {len(existing_dirs)} directories to ingest")
-            
-            stats = ingestion.ingest_from_parquet(existing_dirs, batch_size=10000)
-            logger.info(f"[mysql_ingest] Ingestion completed: {stats}")
-            
-            return {
-                "status": "SUCCESS",
-                "tables_ingested": list(existing_dirs.keys()),
-                "total_rows": sum(stats.get(table, 0) 
-                  for table in existing_dirs.keys()),
-                "stats": stats
-            }
-            
-        except Exception as e:
-            logger.error(f"[mysql_ingest] Error during ingestion: {str(e)}", exc_info=True)
-            raise
 
     ingest_results = ingest()
     validate_results = validate(ingest_results)
     process_summary = spark_process(validate_results)
-    ingest_summary = mysql_ingest(process_summary)
 
-    wait_for_files >> ingest_results
-    ingest_results >> validate_results
-    validate_results >> process_summary
-    process_summary >> ingest_summary
+    wait_for_files >> ingest_results >> validate_results >> process_summary
+
 
 telecom_landing_ingestion()

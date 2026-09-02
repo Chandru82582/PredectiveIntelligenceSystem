@@ -12,6 +12,7 @@ from typing import Dict, Tuple, Any, Optional, List
 import logging
 from datetime import datetime
 from contextlib import contextmanager
+import pandas as pd
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(levelname)s | %(message)s')
 logger = logging.getLogger(__name__)

@@ -19,11 +19,10 @@ from pyspark.sql.types import (
 )
 from pyspark.sql import functions as F
 
-
 class TelecomPipeline:
     """
     Modular, memory-efficient Spark ETL pipeline for Telecom Usage Data
-    and Spatial Grid Enrichment.
+    and Spatial Grid Enrichment with direct high-speed MySQL JDBC ingestion.
     """
 
     COLUMN_MAPPING = {
@@ -81,6 +80,7 @@ class TelecomPipeline:
         self.spark: Optional[SparkSession] = None
 
     def _configure_logger(self) -> logging.Logger:
+        """Configures multi-handler logger for console and file output."""
         self.log_dir.mkdir(parents=True, exist_ok=True)
         log_file = self.log_dir / "telecom_pipeline.log"
 
@@ -107,14 +107,28 @@ class TelecomPipeline:
         return logger
 
     def create_spark_session(self) -> SparkSession:
+        """Initializes SparkSession with dynamic partition overwrite, memory controls, and JDBC drivers."""
+        
+        # Configure HADOOP_HOME if set in environment
         hadoop_home = os.getenv("HADOOP_HOME")
         if hadoop_home and os.path.exists(hadoop_home):
             os.environ["HADOOP_HOME"] = hadoop_home
             hadoop_bin = os.path.join(hadoop_home, "bin")
             if os.path.exists(hadoop_bin):
                 os.environ["PATH"] = os.environ["PATH"] + os.pathsep + hadoop_bin
+        
+        # Extract the raw path from the environment
+        raw_jdbc_jar = os.getenv("JDBC_JAR_PATH") 
+        final_jdbc_jar = None
+        
+        if raw_jdbc_jar:
+            # Safely translate Windows 'd:/' paths to WSL '/mnt/d/' paths for Linux compatibility
+            if sys.platform == "linux" and raw_jdbc_jar[:2].lower() == "d:":
+                final_jdbc_jar = "/mnt/d/" + raw_jdbc_jar[2:].lstrip("\\/").replace("\\", "/")
+            else:
+                final_jdbc_jar = raw_jdbc_jar
 
-        self.spark = (
+        builder = (
             SparkSession.builder
             .appName(self.app_name)
             .master("local[*]")
@@ -123,12 +137,19 @@ class TelecomPipeline:
             .config("spark.driver.memory", "4g")
             .config("spark.driver.maxResultSize", "2g")
             .config("spark.sql.execution.arrow.pyspark.enabled", "true")
-            .getOrCreate()
         )
+        
+        # Only attach the jars config if a valid path was resolved, preventing JVM crashes
+        if final_jdbc_jar:
+            self.logger.info(f"Injecting JDBC driver from: {final_jdbc_jar}")
+            builder = builder.config("spark.jars", final_jdbc_jar)
+            
+        self.spark = builder.getOrCreate()
         self.spark.sparkContext.setLogLevel("WARN")
         return self.spark
 
     def read_raw(self, input_path: Optional[str] = None) -> DataFrame:
+        """Reads raw CSV files with explicit schema and validates file existence."""
         if self.spark is None:
             self.create_spark_session()
 
@@ -186,6 +207,7 @@ class TelecomPipeline:
         self,
         df: DataFrame
     ) -> Tuple[DataFrame, DataFrame, Dict[str, Any]]:
+        """Validates quality rules, isolates quarantined records, and computes derived features."""
         self.logger.info("Executing data quality checks and quarantine isolation...")
 
         df_with_date = df.withColumn(
@@ -247,6 +269,7 @@ class TelecomPipeline:
         return clean_df, quarantine_df, metrics
 
     def aggregate(self, clean_df: DataFrame) -> Dict[str, DataFrame]:
+        """Builds multidimensional analytical aggregations."""
         self.logger.info("Computing multi-dimensional summary aggregations...")
 
         hourly_grid_summary = (
@@ -299,6 +322,7 @@ class TelecomPipeline:
         hourly_df: DataFrame,
         reference_path: Optional[str] = None
     ) -> Tuple[DataFrame, DataFrame]:
+        """Loads spatial dimension reference and enriches hourly metrics."""
         ref_path = Path(reference_path).resolve() if reference_path else self.reference_path
         self.logger.info("Loading spatial reference from: %s", ref_path)
 
@@ -345,6 +369,7 @@ class TelecomPipeline:
         datasets: Dict[str, DataFrame],
         output_dir: Optional[str] = None
     ) -> Dict[str, int]:
+        """Persists datasets to Parquet format segregated by date partitions."""
         out_base = Path(output_dir).resolve() if output_dir else self.output_path
         out_base.mkdir(parents=True, exist_ok=True)
         self.logger.info("Writing pipeline artifacts to base directory: %s", out_base)
@@ -378,7 +403,32 @@ class TelecomPipeline:
 
         return row_counts
 
+    def write_to_mysql(self, df: DataFrame, table_name: str, host: str = "192.168.160.1"):
+        """
+        Pushes a DataFrame directly to MySQL using bulk batched JDBC execution.
+        Requires mysql-connector-j jar to be loaded in the Spark session.
+        """
+        self.logger.info("Writing %d rows to MySQL table: %s", df.count(), table_name)
+        
+        # We enforce rewriteBatchedStatements for massive performance gains in MySQL
+        jdbc_url = f"jdbc:mysql://{host}:3306/telecom_activity?rewriteBatchedStatements=true"
+        properties = {
+            "user": "root",
+            "password": "root",
+            "driver": "com.mysql.cj.jdbc.Driver",
+            "batchsize": "10000",
+            "isolationLevel": "NONE"
+        }
+        
+        df.write.jdbc(
+            url=jdbc_url, 
+            table=table_name, 
+            mode="append", 
+            properties=properties
+        )
+
     def run(self) -> Dict[str, Any]:
+        """Orchestrates pipeline execution for standalone CLI mode."""
         start_time = datetime.now()
         start_perf = time.perf_counter()
 
@@ -427,7 +477,15 @@ class TelecomPipeline:
                 "grid_reference": grid_ref_df,
             }
 
+            # Local parquet writes
             output_rows_summary = self.write_outputs(datasets=datasets_to_write)
+            
+            # Database writes
+            for table_name, df_out in datasets_to_write.items():
+                 # Skip the spatial reference JSON translation table
+                 if table_name != "grid_reference":
+                     self.write_to_mysql(df_out, table_name)
+                     
             status = "SUCCESS"
 
         except Exception as exc:
@@ -467,6 +525,7 @@ class TelecomPipeline:
         }
 
 def main():
+    """CLI entrypoint for running the Telecom Pipeline natively."""
     parser = argparse.ArgumentParser(
         description="Production Telecom Usage Pipeline (ETL & Spatial Enrichment)"
     )
