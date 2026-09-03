@@ -44,6 +44,53 @@ class AlertResponse(BaseModel):
     as_of: datetime
     alerts: List[Alert]
 
+class GridGeography(BaseModel):
+    grid_id: int
+    latitude: float
+    longitude: float
+    sector_label: str
+    source: str  # "geometry" (from enriched_spatial_hourly) or "computed" (grid-math fallback)
+
+class GridGeographyResponse(BaseModel):
+    as_of: datetime
+    grids: List[GridGeography]
+
+class DailyPeak(BaseModel):
+    date: date
+    day_of_week: int  # 0=Mon .. 6=Sun
+    peak_hour: int
+    peak_activity: float
+    delta_hours: float  # peak_hour - trailing_avg_peak_hour
+
+class WeeklyPeakResponse(BaseModel):
+    grid_id: int
+    as_of: datetime
+    trailing_avg_peak_hour: float
+    days: List[DailyPeak]
+
+class ModalityHour(BaseModel):
+    timestamp: datetime
+    sms_in: float
+    sms_out: float
+    call_in: float
+    call_out: float
+    internet_activity: float
+
+class ModalityResponse(BaseModel):
+    grid_id: int
+    as_of: datetime
+    hours: List[ModalityHour]
+
+class GridListItem(BaseModel):
+    grid_id: int
+    total_activity: float
+    severity: str
+
+class GridListResponse(BaseModel):
+    as_of: datetime
+    total: int
+    grids: List[GridListItem]
+
 class GridFeaturesResponse(BaseModel):
     grid_id: int
     avg_activity: float
