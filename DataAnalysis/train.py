@@ -1147,18 +1147,32 @@ def train_lightgbm(feature_table: pd.DataFrame, train_ratio: float = 0.8):
 
     pos_weight = (y_train == 0).sum() / max(1, (y_train == 1).sum())
 
+    # model = lgb.LGBMClassifier(
+    #     n_estimators=500,
+    #     learning_rate=0.03,
+    #     num_leaves=63,
+    #     max_depth=7,
+    #     scale_pos_weight=pos_weight,
+    #     subsample=0.8,
+    #     colsample_bytree=0.8,
+    #     random_state=42,
+    #     n_jobs=-1,
+    # )
     model = lgb.LGBMClassifier(
-        n_estimators=500,
-        learning_rate=0.03,
-        num_leaves=63,
-        max_depth=7,
-        scale_pos_weight=pos_weight,
-        subsample=0.8,
-        colsample_bytree=0.8,
+        n_estimators=1000,
+        learning_rate=0.015,  # Lower learning rate + more trees yields better generalization
+        num_leaves=127,  # Allows deeper feature interactions
+        max_depth=9,
+        min_child_samples=50,  # Prevents overfitting on rare grid IDs
+        subsample=0.7,  # Row bagging
+        subsample_freq=1,
+        colsample_bytree=0.7,  # Feature bagging
+        scale_pos_weight=pos_weight
+        * 0.7,  # Slightly downscale weight to boost precision
+        force_col_wise=True,
         random_state=42,
         n_jobs=-1,
     )
-
     print("Training LightGBM model...")
     model.fit(
         X_train,
@@ -1210,11 +1224,7 @@ def train_lightgbm(feature_table: pd.DataFrame, train_ratio: float = 0.8):
     print("=" * 65)
     print("TOP 10 FEATURE IMPORTANCES")
     print("=" * 65)
-    importances = pd.Series(
-        model.feature_importances_, index=features
-    ).sort_values(ascending=False)
-    for feat, imp in importances.head(10).items():
-        print(f"{feat:<32}: {imp:.4f}")
+    2
 
     return model, feature_table
 

@@ -16,8 +16,35 @@ from rules import AlertAnalyzer
 import math
 import json
 import re
+import time
 
 router = APIRouter(dependencies=[Depends(verify_api_key)])
+
+# ---------------------------------------------------------------------------
+# Lightweight in-process TTL cache
+# ---------------------------------------------------------------------------
+# Every request was re-querying MAX(date, hour) to resolve `as_of`, and every
+# geometry lookup was hitting `enriched_spatial_hourly` again even though
+# grid geometry never changes and `as_of` only moves forward once per batch
+# ingestion. This was the main source of "every click re-syncs slowly" —
+# caching these two things cuts most of the redundant round trips without
+# touching response shapes.
+_AS_OF_TTL_SECONDS = 30
+_as_of_cache = {"value": None, "expires": 0.0}
+_geometry_cache = {}  # grid_id -> {"latitude", "longitude", "sector_label", "source", "polygon"}
+
+
+def _cached_resolve_as_of(db: Session) -> datetime:
+    now = time.monotonic()
+    if _as_of_cache["value"] is not None and now < _as_of_cache["expires"]:
+        return _as_of_cache["value"]
+    result = db.query(HourlyGridSummary.date, HourlyGridSummary.hour).order_by(
+        HourlyGridSummary.date.desc(), HourlyGridSummary.hour.desc()
+    ).first()
+    value = datetime.utcnow() if not result or not result[0] else datetime(result[0].year, result[0].month, result[0].day, result[1])
+    _as_of_cache["value"] = value
+    _as_of_cache["expires"] = now + _AS_OF_TTL_SECONDS
+    return value
 
 # ---------------------------------------------------------------------------
 # Milan grid geometry
@@ -25,24 +52,36 @@ router = APIRouter(dependencies=[Depends(verify_api_key)])
 # The `enriched_spatial_hourly.geometry` column *may* carry real per-cell
 # geometry (GeoJSON or WKT) from the Spark spatial join. Where it doesn't
 # (or the table isn't populated yet), we fall back to a deterministic
-# centroid computed from grid_id, since the Milan CDR grid is a fixed
-# 100x100 lattice over a known bounding box. This keeps the map usable
-# even before the spatial-enrichment job has run, and both paths agree
-# once real geometry is loaded.
-MILAN_LAT_MIN, MILAN_LAT_MAX = 45.40, 45.54
-MILAN_LON_MIN, MILAN_LON_MAX = 9.10, 9.30
+# centroid/square computed from grid_id. Bounding box and cell step below
+# are calibrated against a real sample cell from that column (~235m square
+# cells, 100x100 lattice), so computed and real geometry line up closely.
+MILAN_LAT_MIN, MILAN_LAT_MAX = 45.3529, 45.5649
+MILAN_LON_MIN, MILAN_LON_MAX = 9.0115, 9.3115
 GRID_DIM = 100  # 100 x 100 = 10,000 cells, matching the 1-10000 grid_id range
+LAT_STEP = (MILAN_LAT_MAX - MILAN_LAT_MIN) / GRID_DIM
+LON_STEP = (MILAN_LON_MAX - MILAN_LON_MIN) / GRID_DIM
 
 
 def compute_grid_centroid(grid_id: int):
     idx = grid_id - 1
     col = idx % GRID_DIM
     row = idx // GRID_DIM
-    lon_step = (MILAN_LON_MAX - MILAN_LON_MIN) / GRID_DIM
-    lat_step = (MILAN_LAT_MAX - MILAN_LAT_MIN) / GRID_DIM
-    lon = MILAN_LON_MIN + (col + 0.5) * lon_step
-    lat = MILAN_LAT_MIN + (row + 0.5) * lat_step
+    lon = MILAN_LON_MIN + (col + 0.5) * LON_STEP
+    lat = MILAN_LAT_MIN + (row + 0.5) * LAT_STEP
     return round(lat, 6), round(lon, 6)
+
+
+def compute_grid_polygon(grid_id: int):
+    """[lat, lon] ring for a computed cell, matching the real geometry's
+    footprint so the map can draw a consistent square regardless of source."""
+    lat, lon = compute_grid_centroid(grid_id)
+    dlat, dlon = LAT_STEP / 2, LON_STEP / 2
+    return [
+        [round(lat - dlat, 6), round(lon - dlon, 6)],
+        [round(lat - dlat, 6), round(lon + dlon, 6)],
+        [round(lat + dlat, 6), round(lon + dlon, 6)],
+        [round(lat + dlat, 6), round(lon - dlon, 6)],
+    ]
 
 
 def sector_label_for(grid_id: int) -> str:
@@ -83,22 +122,57 @@ def parse_geometry_centroid(geom_str: str):
         return round(lat, 6), round(lon, 6)
     return None
 
+
+def parse_geometry_polygon(geom_str: str):
+    """Extract a [lat, lon]-ordered ring (Leaflet convention) from a stored
+    GeoJSON Polygon, e.g. {"type":"Polygon","coordinates":[[[lon,lat],...]]}.
+    Returns None if the geometry isn't a polygon or fails to parse."""
+    if not geom_str:
+        return None
+    try:
+        geo = json.loads(geom_str)
+        if geo.get("type") == "Polygon" and geo.get("coordinates"):
+            ring = geo["coordinates"][0]
+            return [[round(c[1], 6), round(c[0], 6)] for c in ring]
+    except (json.JSONDecodeError, TypeError, AttributeError, IndexError, KeyError):
+        pass
+    return None
+
+
+def _resolve_geography(db: Session, grid_id: int) -> dict:
+    """Cached geography lookup — grid geometry is static reference data, so
+    once resolved for a grid_id it never needs to be queried again."""
+    if grid_id in _geometry_cache:
+        return _geometry_cache[grid_id]
+
+    record = (
+        db.query(EnrichedSpatialHourly.geometry)
+        .filter(EnrichedSpatialHourly.grid_id == grid_id, EnrichedSpatialHourly.geometry.isnot(None))
+        .first()
+    )
+    lat = lon = polygon = None
+    source = "computed"
+    if record and record[0]:
+        centroid = parse_geometry_centroid(record[0])
+        polygon = parse_geometry_polygon(record[0])
+        if centroid:
+            lat, lon = centroid
+            source = "geometry"
+    if lat is None:
+        lat, lon = compute_grid_centroid(grid_id)
+    if polygon is None:
+        polygon = compute_grid_polygon(grid_id)
+
+    result = {"latitude": lat, "longitude": lon, "sector_label": sector_label_for(grid_id), "source": source, "polygon": polygon}
+    _geometry_cache[grid_id] = result
+    return result
+
 def resolve_as_of(db: Session, provided_as_of: Optional[datetime] = None) -> datetime:
-    """Resolves dynamic 'as_of' date, defaulting to max DB timestamp."""
+    """Resolves dynamic 'as_of' date, defaulting to max DB timestamp (cached
+    for _AS_OF_TTL_SECONDS since this is queried on almost every request)."""
     if provided_as_of:
         return provided_as_of
-    
-    # Query latest date and hour together to reflect the true MAX(timestamp) in the analytics layer
-    result = db.query(HourlyGridSummary.date, HourlyGridSummary.hour).order_by(
-        HourlyGridSummary.date.desc(), HourlyGridSummary.hour.desc()
-    ).first()
-    if not result or not result[0]:
-        # Fallback if DB is completely empty
-        return datetime.utcnow()
-    
-    max_date, max_hour = result
-    # Construct a datetime from the correlated max date and hour
-    return datetime(max_date.year, max_date.month, max_date.day, max_hour)
+    return _cached_resolve_as_of(db)
 
 
 def validate_grid_id(grid_id: int):
@@ -155,8 +229,16 @@ def get_grid_timeseries(
     # Calculate 24-hour lookback window based on requirements
     start_time = effective_time - timedelta(hours=23)
     
-    # Using Pandas for easy filtering and grouping across day boundaries
-    query = db.query(HourlyGridSummary).filter(HourlyGridSummary.grid_id == grid_id)
+    # Filter by date range in SQL rather than pulling the grid's entire
+    # history into pandas — on a multi-month table this is the difference
+    # between scanning a few hundred rows and the whole table every click.
+    sql_start_date = date if date is not None else start_time.date()
+    sql_end_date = date if date is not None else effective_time.date()
+    query = db.query(HourlyGridSummary).filter(
+        HourlyGridSummary.grid_id == grid_id,
+        HourlyGridSummary.date >= sql_start_date,
+        HourlyGridSummary.date <= sql_end_date,
+    )
     df = pd.read_sql(query.statement, query.session.bind)
     
     if df.empty:
@@ -220,12 +302,16 @@ def get_alerts(
     # Extract trailing 48 hours to ensure baseline logic works across days
     start_time = effective_time - timedelta(hours=48)
     
-    # Load into dataframe for the provided rule engine
+    # Load into dataframe for the provided rule engine — filtered by date
+    # in SQL first so we don't pull every grid's entire history every call.
     query = db.query(
         HourlyGridSummary.grid_id, 
         HourlyGridSummary.date, 
         HourlyGridSummary.hour, 
         HourlyGridSummary.total_activity
+    ).filter(
+        HourlyGridSummary.date >= start_time.date(),
+        HourlyGridSummary.date <= effective_time.date(),
     )
     df = pd.read_sql(query.statement, query.session.bind)
     if df.empty:
@@ -276,7 +362,11 @@ def get_grid_features(
     effective_time = resolve_as_of(db, as_of)
     start_time = effective_time - timedelta(hours=48) # 2 days of data for features
     
-    query = db.query(HourlyGridSummary).filter(HourlyGridSummary.grid_id == grid_id)
+    query = db.query(HourlyGridSummary).filter(
+        HourlyGridSummary.grid_id == grid_id,
+        HourlyGridSummary.date >= start_time.date(),
+        HourlyGridSummary.date <= effective_time.date(),
+    )
     df = pd.read_sql(query.statement, query.session.bind)
     
     if df.empty:
@@ -332,28 +422,12 @@ def get_grid_features(
 
 @router.get("/network/grid/{grid_id}/geography", response_model=GridGeography)
 def get_grid_geography(grid_id: int, db: Session = Depends(get_db)):
-    """Single-cell lat/lon centroid + ops sector label, for map tooltips
-    and the investigator header. Prefers real geometry if it has been
-    loaded into enriched_spatial_hourly, otherwise computes it."""
+    """Single-cell lat/lon centroid + real/derived polygon + ops sector
+    label. Cached in-process since grid geometry is static reference data —
+    repeated navigation to the same grid no longer re-queries the DB."""
     validate_grid_id(grid_id)
-    record = (
-        db.query(EnrichedSpatialHourly.geometry)
-        .filter(EnrichedSpatialHourly.grid_id == grid_id, EnrichedSpatialHourly.geometry.isnot(None))
-        .first()
-    )
-    lat = lon = None
-    source = "computed"
-    if record and record[0]:
-        parsed = parse_geometry_centroid(record[0])
-        if parsed:
-            lat, lon = parsed
-            source = "geometry"
-    if lat is None:
-        lat, lon = compute_grid_centroid(grid_id)
-    return GridGeography(
-        grid_id=grid_id, latitude=lat, longitude=lon,
-        sector_label=sector_label_for(grid_id), source=source,
-    )
+    geo = _resolve_geography(db, grid_id)
+    return GridGeography(grid_id=grid_id, **geo)
 
 
 @router.get("/network/grids/geography", response_model=GridGeographyResponse)
@@ -362,8 +436,9 @@ def get_grids_geography(
     as_of: Optional[datetime] = None,
     db: Session = Depends(get_db),
 ):
-    """Bulk lat/lon lookup, used to plot the heatmap and hotspot cards in
-    one call instead of one request per grid."""
+    """Bulk lat/lon + polygon lookup, used to plot the heatmap and hotspot
+    cards in one call. Per-grid results are cached, so only grids not yet
+    seen this process lifetime trigger a DB lookup."""
     effective_time = resolve_as_of(db, as_of)
 
     if grid_ids:
@@ -378,26 +453,33 @@ def get_grids_geography(
         ).all()
         ids = [r[0] for r in rows]
 
-    geo_rows = db.query(EnrichedSpatialHourly.grid_id, EnrichedSpatialHourly.geometry).filter(
-        EnrichedSpatialHourly.grid_id.in_(ids), EnrichedSpatialHourly.geometry.isnot(None)
-    ).all()
-    geo_map = {}
-    for gid, geom in geo_rows:
-        if gid not in geo_map and geom:
-            parsed = parse_geometry_centroid(geom)
-            if parsed:
-                geo_map[gid] = parsed
-
-    grids = []
-    for gid in ids:
-        if gid in geo_map:
-            lat, lon = geo_map[gid]
-            source = "geometry"
-        else:
-            lat, lon = compute_grid_centroid(gid)
+    # Only hit the DB for grid_ids we haven't resolved before.
+    uncached = [gid for gid in ids if gid not in _geometry_cache]
+    if uncached:
+        geo_rows = db.query(EnrichedSpatialHourly.grid_id, EnrichedSpatialHourly.geometry).filter(
+            EnrichedSpatialHourly.grid_id.in_(uncached), EnrichedSpatialHourly.geometry.isnot(None)
+        ).all()
+        geom_by_id = {}
+        for gid, geom in geo_rows:
+            if gid not in geom_by_id and geom:
+                geom_by_id[gid] = geom
+        for gid in uncached:
+            geom = geom_by_id.get(gid)
+            lat = lon = polygon = None
             source = "computed"
-        grids.append(GridGeography(grid_id=gid, latitude=lat, longitude=lon, sector_label=sector_label_for(gid), source=source))
+            if geom:
+                centroid = parse_geometry_centroid(geom)
+                polygon = parse_geometry_polygon(geom)
+                if centroid:
+                    lat, lon = centroid
+                    source = "geometry"
+            if lat is None:
+                lat, lon = compute_grid_centroid(gid)
+            if polygon is None:
+                polygon = compute_grid_polygon(gid)
+            _geometry_cache[gid] = {"latitude": lat, "longitude": lon, "sector_label": sector_label_for(gid), "source": source, "polygon": polygon}
 
+    grids = [GridGeography(grid_id=gid, **_geometry_cache[gid]) for gid in ids]
     return GridGeographyResponse(as_of=effective_time, grids=grids)
 
 
@@ -449,24 +531,35 @@ def get_weekly_peak(grid_id: int, as_of: Optional[datetime] = None, db: Session 
 def get_grid_modality(
     grid_id: int,
     as_of: Optional[datetime] = None,
-    hours: int = Query(24, ge=1, le=168, description="Trailing window size in hours"),
+    date: Optional[date] = None,
+    hours: int = Query(24, ge=1, le=168, description="Trailing window size in hours (ignored when `date` is set)"),
     db: Session = Depends(get_db),
 ):
     """Directional sms_in/sms_out/call_in/call_out breakdown per hour.
     /network/grid/{grid_id} only exposes combined sms/call totals, which
     is enough for the stacked modality area but not for the diverging
-    inbound-vs-outbound bar chart — this fills that gap."""
+    inbound-vs-outbound bar chart — this fills that gap. Accepts the same
+    `date` override as the timeseries endpoint for historical analysis."""
     validate_grid_id(grid_id)
     effective_time = resolve_as_of(db, as_of)
     start_time = effective_time - timedelta(hours=hours - 1)
 
-    query = db.query(HourlyGridSummary).filter(HourlyGridSummary.grid_id == grid_id)
+    sql_start_date = date if date is not None else start_time.date()
+    sql_end_date = date if date is not None else effective_time.date()
+    query = db.query(HourlyGridSummary).filter(
+        HourlyGridSummary.grid_id == grid_id,
+        HourlyGridSummary.date >= sql_start_date,
+        HourlyGridSummary.date <= sql_end_date,
+    )
     df = pd.read_sql(query.statement, query.session.bind)
     if df.empty:
         raise HTTPException(status_code=404, detail="No data found for grid")
 
     df["timestamp"] = pd.to_datetime(df["date"]) + pd.to_timedelta(df["hour"], unit="h")
-    df = df[(df["timestamp"] >= start_time) & (df["timestamp"] <= effective_time)].sort_values("timestamp")
+    if date is not None:
+        df = df[df["date"] == date].sort_values("timestamp")
+    else:
+        df = df[(df["timestamp"] >= start_time) & (df["timestamp"] <= effective_time)].sort_values("timestamp")
     if df.empty:
         raise HTTPException(status_code=404, detail="No data found in requested window")
 

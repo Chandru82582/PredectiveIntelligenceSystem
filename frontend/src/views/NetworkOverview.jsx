@@ -30,6 +30,10 @@ export default function NetworkOverview({ selectedGridId, onSelectGrid }) {
   const [alerts, setAlerts] = useState([]);
   const [loading, setLoading] = useState(true);
 
+  // A single Promise.all pass, and every request below now hits the
+  // client-side cache (api.js) on repeat visits instead of re-querying the
+  // backend — this is what used to make every tab switch feel like a cold
+  // load.
   const load = useCallback(async () => {
     setLoading(true);
     const [summaryRes, gridsRes, hotspotsRes, alertsRes] = await Promise.all([
@@ -67,7 +71,7 @@ export default function NetworkOverview({ selectedGridId, onSelectGrid }) {
   const cells = gridList.map((g) => ({
     grid_id: g.grid_id,
     total_activity: g.total_activity,
-    ...(geoByGrid[g.grid_id] || { latitude: 45.47, longitude: 9.2 }),
+    ...(geoByGrid[g.grid_id] || {}),
   }));
 
   return (
@@ -79,32 +83,32 @@ export default function NetworkOverview({ selectedGridId, onSelectGrid }) {
         <KpiTile icon={Crosshair} label="Top Grid" value={summary ? `#${summary.top_grid}` : '—'} accent="border-rose-500/30 text-rose-300" />
       </div>
 
-      <div className="grid grid-cols-1 gap-5 xl:grid-cols-3">
-        <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-4 xl:col-span-2">
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="text-sm font-medium text-slate-200">Geographic Load Map</h2>
-            {loading && <span className="text-[10px] text-slate-500">syncing…</span>}
-          </div>
-          <GeographicHeatmap cells={cells} selectedGridId={selectedGridId} onSelectGrid={onSelectGrid} />
-        </div>
-
-        <div className="flex flex-col gap-5">
-          <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
-            <h2 className="mb-3 text-sm font-medium text-slate-200">Diurnal Peak Dynamics — Grid #{summary?.top_grid ?? '—'}</h2>
-            <PeakHourDial timeseries={dialTimeseries} weekly={weekly} />
-          </div>
-        </div>
-      </div>
-
+      {/* Most actionable first: what needs attention right now, and where. */}
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
-        <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
-          <h2 className="mb-3 text-sm font-medium text-slate-200">Hotspots Leaderboard</h2>
-          <HotspotsLeaderboard hotspots={hotspots} geoByGrid={geoByGrid} selectedGridId={selectedGridId} onSelectGrid={onSelectGrid} />
-        </div>
         <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
           <h2 className="mb-3 text-sm font-medium text-slate-200">Algorithmic Anomaly Feed</h2>
           <AnomalyFeed alerts={alerts} onSelectGrid={onSelectGrid} />
         </div>
+        <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+          <h2 className="mb-3 text-sm font-medium text-slate-200">Hotspots Leaderboard</h2>
+          <HotspotsLeaderboard hotspots={hotspots} geoByGrid={geoByGrid} selectedGridId={selectedGridId} onSelectGrid={onSelectGrid} />
+        </div>
+      </div>
+
+      {/* Spatial context for whatever the feed/leaderboard just surfaced. */}
+      <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="text-sm font-medium text-slate-200">Geographic Load Map</h2>
+          {loading && <span className="text-[10px] text-slate-500">syncing…</span>}
+        </div>
+        <GeographicHeatmap cells={cells} selectedGridId={selectedGridId} onSelectGrid={onSelectGrid} />
+      </div>
+
+      {/* Temporal / scheduling context — lower urgency, used for planning
+          maintenance windows rather than incident response. */}
+      <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+        <h2 className="mb-3 text-sm font-medium text-slate-200">Diurnal Peak Dynamics — Grid #{summary?.top_grid ?? '—'}</h2>
+        <PeakHourDial timeseries={dialTimeseries} weekly={weekly} />
       </div>
     </div>
   );

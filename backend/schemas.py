@@ -50,6 +50,7 @@ class GridGeography(BaseModel):
     longitude: float
     sector_label: str
     source: str  # "geometry" (from enriched_spatial_hourly) or "computed" (grid-math fallback)
+    polygon: Optional[List[List[float]]] = None  # [[lat, lon], ...] ring, real or computed square
 
 class GridGeographyResponse(BaseModel):
     as_of: datetime

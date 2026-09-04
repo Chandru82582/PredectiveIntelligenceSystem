@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { MapPin, RefreshCw } from 'lucide-react';
+import { MapPin, RefreshCw, CalendarDays, RotateCcw } from 'lucide-react';
 import * as api from '../services/api';
 import PeakHourDial from '../components/PeakHourDial';
 import ActivityConfidenceBand from '../components/ActivityConfidenceBand';
@@ -15,14 +15,17 @@ export default function GridInvestigator({ gridId }) {
   const [geo, setGeo] = useState(null);
   const [loading, setLoading] = useState(true);
   const [usingFallback, setUsingFallback] = useState(false);
+  const [selectedDate, setSelectedDate] = useState(''); // '' = latest/live window
+
+  const asOfParam = selectedDate ? `${selectedDate}T23:00:00` : undefined;
 
   const load = useCallback(async () => {
     setLoading(true);
     const [tsRes, modRes, featRes, weeklyRes, geoRes] = await Promise.all([
-      api.getGridTimeseries(gridId),
-      api.getGridModality(gridId, { hours: 24 }),
-      api.getGridFeatures(gridId),
-      api.getWeeklyPeak(gridId),
+      api.getGridTimeseries(gridId, selectedDate ? { date: selectedDate } : {}),
+      api.getGridModality(gridId, selectedDate ? { date: selectedDate } : { hours: 24 }),
+      api.getGridFeatures(gridId, asOfParam),
+      api.getWeeklyPeak(gridId, asOfParam),
       api.getGridGeography(gridId),
     ]);
     setTimeseries(tsRes.timeseries || []);
@@ -32,7 +35,8 @@ export default function GridInvestigator({ gridId }) {
     setGeo(geoRes);
     setUsingFallback([tsRes, modRes, featRes, weeklyRes, geoRes].some((r) => r.meta?.fallback));
     setLoading(false);
-  }, [gridId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gridId, selectedDate]);
 
   useEffect(() => {
     load();
@@ -52,6 +56,24 @@ export default function GridInvestigator({ gridId }) {
             </div>
           </div>
         </div>
+
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 rounded border border-slate-800 bg-slate-900/70 px-2 py-1">
+            <CalendarDays size={12} className="text-slate-500" />
+            <input
+              type="date"
+              value={selectedDate}
+              onChange={(e) => setSelectedDate(e.target.value)}
+              className="bg-transparent font-mono text-[11px] text-slate-200 focus:outline-none [color-scheme:dark]"
+            />
+          </div>
+          {selectedDate && (
+            <button onClick={() => setSelectedDate('')} className="flex items-center gap-1 rounded border border-slate-800 bg-slate-800/60 px-2 py-1 text-[10px] text-slate-300 hover:text-cyan-300">
+              <RotateCcw size={11} /> Latest
+            </button>
+          )}
+        </div>
+
         <div className="flex items-center gap-2 text-[10px] text-slate-500">
           {usingFallback && <span className="rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-amber-300">synthetic fallback data</span>}
           <button onClick={load} className="flex items-center gap-1 rounded border border-slate-800 bg-slate-800/60 px-2 py-1 text-slate-300 hover:text-cyan-300">
@@ -60,15 +82,14 @@ export default function GridInvestigator({ gridId }) {
         </div>
       </div>
 
+      {/* Diagnostic first: is this cell behaving abnormally right now? */}
+      <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+        <h2 className="mb-3 text-sm font-medium text-slate-200">Activity vs Baseline Confidence Band</h2>
+        <ActivityConfidenceBand timeseries={timeseries} />
+      </div>
+
+      {/* Breakdown analysis, once an anomaly (or its absence) is established. */}
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
-        <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
-          <h2 className="mb-3 text-sm font-medium text-slate-200">Diurnal Peak Dynamics</h2>
-          <PeakHourDial timeseries={timeseries} weekly={weekly} />
-        </div>
-        <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
-          <h2 className="mb-3 text-sm font-medium text-slate-200">Activity vs Baseline Confidence Band</h2>
-          <ActivityConfidenceBand timeseries={timeseries} />
-        </div>
         <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
           <h2 className="mb-3 text-sm font-medium text-slate-200">Modality Decomposition & Asymmetry</h2>
           <ModalityDecomposition timeseries={timeseries} modality={modality} />
@@ -77,10 +98,18 @@ export default function GridInvestigator({ gridId }) {
           <h2 className="mb-3 text-sm font-medium text-slate-200">Traffic Dynamics & Momentum</h2>
           <TrafficDynamics timeseries={timeseries} />
         </div>
-        <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-4 xl:col-span-2">
-          <h2 className="mb-3 text-sm font-medium text-slate-200">Cell Behavioral Fingerprint</h2>
-          <GridFingerprint timeseries={timeseries} features={features} />
-        </div>
+      </div>
+
+      {/* Contextual classification — useful once the "what's happening" is known. */}
+      <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+        <h2 className="mb-3 text-sm font-medium text-slate-200">Cell Behavioral Fingerprint</h2>
+        <GridFingerprint timeseries={timeseries} features={features} />
+      </div>
+
+      {/* Scheduling/planning context — lowest priority during triage. */}
+      <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+        <h2 className="mb-3 text-sm font-medium text-slate-200">Diurnal Peak Dynamics</h2>
+        <PeakHourDial timeseries={timeseries} weekly={weekly} />
       </div>
     </div>
   );

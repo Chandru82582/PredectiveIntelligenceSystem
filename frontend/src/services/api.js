@@ -7,8 +7,15 @@
 // dashboard is never blank. `meta.fallback` on each response tells the UI
 // whether it is looking at live or synthetic data.
 
+import { withCache, getCached, setCached } from './cache';
+
 const BASE_URL = import.meta.env?.VITE_API_BASE_URL || 'http://localhost:8000';
 const API_KEY = import.meta.env?.VITE_API_KEY || '';
+
+// "Live" queries (no explicit as_of/date) move forward with each batch
+// ingestion, so they're cached briefly. A query pinned to a specific
+// as_of/date is a fixed point in history and is cached indefinitely.
+const LIVE_TTL_MS = 20_000;
 
 async function request(path, params = {}) {
   const url = new URL(path, BASE_URL);
@@ -84,8 +91,8 @@ function fallbackModality(gridId, hours = 24, endTime = new Date()) {
 }
 
 const GRID_DIM = 100;
-const LAT_MIN = 45.40, LAT_MAX = 45.54;
-const LON_MIN = 9.10, LON_MAX = 9.30;
+const LAT_MIN = 45.3529, LAT_MAX = 45.5649;
+const LON_MIN = 9.0115, LON_MAX = 9.3115;
 
 function computeCentroid(gridId) {
   const idx = gridId - 1;
@@ -97,6 +104,18 @@ function computeCentroid(gridId) {
     latitude: LAT_MIN + (row + 0.5) * latStep,
     longitude: LON_MIN + (col + 0.5) * lonStep,
   };
+}
+
+function computePolygon(gridId) {
+  const { latitude, longitude } = computeCentroid(gridId);
+  const dLat = (LAT_MAX - LAT_MIN) / GRID_DIM / 2;
+  const dLon = (LON_MAX - LON_MIN) / GRID_DIM / 2;
+  return [
+    [latitude - dLat, longitude - dLon],
+    [latitude - dLat, longitude + dLon],
+    [latitude + dLat, longitude + dLon],
+    [latitude + dLat, longitude - dLon],
+  ];
 }
 
 function sectorLabel(gridId) {
@@ -115,191 +134,235 @@ export const QUICK_SWITCH_GRIDS = [100, 1420, 3292, 4365, 7240];
 // ---------------------------------------------------------------------------
 
 export async function getNetworkSummary(asOf) {
-  try {
-    const data = await request('/network/summary', { as_of: asOf });
-    return { ...data, meta: { fallback: false } };
-  } catch (err) {
-    console.warn('[api] getNetworkSummary fallback:', err.message);
-    return {
-      total_activity: 284213,
-      active_grids: 6842,
-      peak_hour: 19,
-      top_grid: 4365,
-      as_of: new Date().toISOString(),
-      meta: { fallback: true },
-    };
-  }
+  const key = `summary:${asOf || 'latest'}`;
+  return withCache(key, asOf ? null : LIVE_TTL_MS, async () => {
+    try {
+      const data = await request('/network/summary', { as_of: asOf });
+      return { ...data, meta: { fallback: false } };
+    } catch (err) {
+      console.warn('[api] getNetworkSummary fallback:', err.message);
+      return {
+        total_activity: 284213,
+        active_grids: 6842,
+        peak_hour: 19,
+        top_grid: 4365,
+        as_of: new Date().toISOString(),
+        meta: { fallback: true },
+      };
+    }
+  });
 }
 
 export async function getGridTimeseries(gridId, { asOf, date, hour } = {}) {
-  try {
-    const data = await request(`/network/grid/${gridId}`, { as_of: asOf, date, hour });
-    return { ...data, meta: { fallback: false } };
-  } catch (err) {
-    console.warn('[api] getGridTimeseries fallback:', err.message);
-    return {
-      grid_id: gridId,
-      as_of: new Date().toISOString(),
-      timeseries: fallbackTimeseries(gridId),
-      meta: { fallback: true },
-    };
-  }
+  const key = `ts:${gridId}:${date || ''}:${hour ?? ''}:${asOf || 'latest'}`;
+  return withCache(key, date || asOf ? null : LIVE_TTL_MS, async () => {
+    try {
+      const data = await request(`/network/grid/${gridId}`, { as_of: asOf, date, hour });
+      return { ...data, meta: { fallback: false } };
+    } catch (err) {
+      console.warn('[api] getGridTimeseries fallback:', err.message);
+      return {
+        grid_id: gridId,
+        as_of: new Date().toISOString(),
+        timeseries: fallbackTimeseries(gridId),
+        meta: { fallback: true },
+      };
+    }
+  });
 }
 
 // NEW: directional in/out breakdown, powers ModalityDecomposition's diverging bar
-export async function getGridModality(gridId, { asOf, hours = 24 } = {}) {
-  try {
-    const data = await request(`/network/grid/${gridId}/modality`, { as_of: asOf, hours });
-    return { ...data, meta: { fallback: false } };
-  } catch (err) {
-    console.warn('[api] getGridModality fallback:', err.message);
-    return {
-      grid_id: gridId,
-      as_of: new Date().toISOString(),
-      hours: fallbackModality(gridId, hours),
-      meta: { fallback: true },
-    };
-  }
+export async function getGridModality(gridId, { asOf, date, hours = 24 } = {}) {
+  const key = `modality:${gridId}:${date || ''}:${hours}:${asOf || 'latest'}`;
+  return withCache(key, date || asOf ? null : LIVE_TTL_MS, async () => {
+    try {
+      const data = await request(`/network/grid/${gridId}/modality`, { as_of: asOf, date, hours });
+      return { ...data, meta: { fallback: false } };
+    } catch (err) {
+      console.warn('[api] getGridModality fallback:', err.message);
+      return {
+        grid_id: gridId,
+        as_of: new Date().toISOString(),
+        hours: fallbackModality(gridId, hours),
+        meta: { fallback: true },
+      };
+    }
+  });
 }
 
 export async function getGridFeatures(gridId, asOf) {
-  try {
-    const data = await request(`/network/grid/${gridId}/features`, { as_of: asOf });
-    return { ...data, meta: { fallback: false } };
-  } catch (err) {
-    console.warn('[api] getGridFeatures fallback:', err.message);
-    const rand = seededRandom(gridId);
-    return {
-      grid_id: gridId,
-      avg_activity: 220 + rand() * 300,
-      activity_growth: (rand() - 0.4) * 0.6,
-      active_hours: 18 + Math.floor(rand() * 6),
-      peak_ratio: 1.4 + rand() * 1.6,
-      variability: 60 + rand() * 140,
-      internet_share: 0.45 + rand() * 0.3,
-      feature_timestamp: new Date().toISOString(),
-      data_quality: 'LOW',
-      meta: { fallback: true },
-    };
-  }
+  const key = `features:${gridId}:${asOf || 'latest'}`;
+  return withCache(key, asOf ? null : LIVE_TTL_MS, async () => {
+    try {
+      const data = await request(`/network/grid/${gridId}/features`, { as_of: asOf });
+      return { ...data, meta: { fallback: false } };
+    } catch (err) {
+      console.warn('[api] getGridFeatures fallback:', err.message);
+      const rand = seededRandom(gridId);
+      return {
+        grid_id: gridId,
+        avg_activity: 220 + rand() * 300,
+        activity_growth: (rand() - 0.4) * 0.6,
+        active_hours: 18 + Math.floor(rand() * 6),
+        peak_ratio: 1.4 + rand() * 1.6,
+        variability: 60 + rand() * 140,
+        internet_share: 0.45 + rand() * 0.3,
+        feature_timestamp: new Date().toISOString(),
+        data_quality: 'LOW',
+        meta: { fallback: true },
+      };
+    }
+  });
 }
 
-// NEW: real (or grid-math-derived) lat/lon centroid for one cell
+// NEW: real (or grid-math-derived) lat/lon + polygon for one cell.
+// Geometry is static, so this is cached with no expiry.
 export async function getGridGeography(gridId) {
-  try {
-    const data = await request(`/network/grid/${gridId}/geography`);
-    return { ...data, meta: { fallback: false } };
-  } catch (err) {
-    console.warn('[api] getGridGeography fallback:', err.message);
-    return { grid_id: gridId, ...computeCentroid(gridId), sector_label: sectorLabel(gridId), source: 'computed', meta: { fallback: true } };
-  }
+  const key = `geo:${gridId}`;
+  return withCache(key, null, async () => {
+    try {
+      const data = await request(`/network/grid/${gridId}/geography`);
+      return { ...data, meta: { fallback: false } };
+    } catch (err) {
+      console.warn('[api] getGridGeography fallback:', err.message);
+      return { grid_id: gridId, ...computeCentroid(gridId), polygon: computePolygon(gridId), sector_label: sectorLabel(gridId), source: 'computed', meta: { fallback: true } };
+    }
+  });
 }
 
-// NEW: bulk lat/lon lookup, powers the heatmap canvas + leaderboard coordinates
+// NEW: bulk lat/lon + polygon lookup. Reuses whatever's already cached
+// per-grid and only requests the ones that are genuinely missing.
 export async function getGridsGeography(gridIds, asOf) {
+  const ids = gridIds && gridIds.length ? gridIds : null;
+  const cacheKeys = ids ? ids.map((id) => `geo:${id}`) : null;
+  const cachedResults = {};
+  let missing = ids;
+
+  if (ids) {
+    missing = [];
+    ids.forEach((id, i) => {
+      const hit = getCached(cacheKeys[i]);
+      if (hit) cachedResults[id] = hit;
+      else missing.push(id);
+    });
+    if (missing.length === 0) {
+      return { as_of: new Date().toISOString(), grids: ids.map((id) => cachedResults[id]), meta: { fallback: false } };
+    }
+  }
+
   try {
     const data = await request('/network/grids/geography', {
-      grid_ids: gridIds && gridIds.length ? gridIds.join(',') : undefined,
+      grid_ids: missing && missing.length ? missing.join(',') : undefined,
       as_of: asOf,
     });
-    return { ...data, meta: { fallback: false } };
+    (data.grids || []).forEach((g) => setCached(`geo:${g.grid_id}`, { ...g, meta: { fallback: false } }, null));
+    const merged = ids ? ids.map((id) => cachedResults[id] || (data.grids || []).find((g) => g.grid_id === id)).filter(Boolean) : data.grids;
+    return { as_of: data.as_of, grids: merged, meta: { fallback: false } };
   } catch (err) {
     console.warn('[api] getGridsGeography fallback:', err.message);
-    const ids = gridIds && gridIds.length ? gridIds : Array.from({ length: 400 }, (_, i) => i * 25 + 1);
-    return {
-      as_of: new Date().toISOString(),
-      grids: ids.map((id) => ({ grid_id: id, ...computeCentroid(id), sector_label: sectorLabel(id), source: 'computed' })),
-      meta: { fallback: true },
-    };
+    const fallbackIds = ids || Array.from({ length: 400 }, (_, i) => i * 25 + 1);
+    const grids = fallbackIds.map(
+      (id) => cachedResults[id] || { grid_id: id, ...computeCentroid(id), polygon: computePolygon(id), sector_label: sectorLabel(id), source: 'computed' }
+    );
+    return { as_of: new Date().toISOString(), grids, meta: { fallback: true } };
   }
 }
 
 // NEW: trailing 7-day peak-hour ribbon, powers PeakHourDial's week view
 export async function getWeeklyPeak(gridId, asOf) {
-  try {
-    const data = await request(`/network/grid/${gridId}/weekly-peak`, { as_of: asOf });
-    return { ...data, meta: { fallback: false } };
-  } catch (err) {
-    console.warn('[api] getWeeklyPeak fallback:', err.message);
-    const rand = seededRandom(gridId * 7);
-    const days = [];
-    const today = new Date();
-    for (let i = 6; i >= 0; i--) {
-      const d = new Date(today.getTime() - i * 86400000);
-      const isWeekend = d.getDay() === 0 || d.getDay() === 6;
-      const peakHour = Math.round((isWeekend ? 15.5 : 14.0) + (rand() - 0.5) * 3);
-      days.push({
-        date: d.toISOString().slice(0, 10),
-        day_of_week: (d.getDay() + 6) % 7,
-        peak_hour: peakHour,
-        peak_activity: 380 + rand() * 220,
-        delta_hours: 0,
-      });
+  const key = `weekly:${gridId}:${asOf || 'latest'}`;
+  return withCache(key, asOf ? null : LIVE_TTL_MS, async () => {
+    try {
+      const data = await request(`/network/grid/${gridId}/weekly-peak`, { as_of: asOf });
+      return { ...data, meta: { fallback: false } };
+    } catch (err) {
+      console.warn('[api] getWeeklyPeak fallback:', err.message);
+      const rand = seededRandom(gridId * 7);
+      const days = [];
+      const today = new Date();
+      for (let i = 6; i >= 0; i--) {
+        const d = new Date(today.getTime() - i * 86400000);
+        const isWeekend = d.getDay() === 0 || d.getDay() === 6;
+        const peakHour = Math.round((isWeekend ? 15.5 : 14.0) + (rand() - 0.5) * 3);
+        days.push({
+          date: d.toISOString().slice(0, 10),
+          day_of_week: (d.getDay() + 6) % 7,
+          peak_hour: peakHour,
+          peak_activity: 380 + rand() * 220,
+          delta_hours: 0,
+        });
+      }
+      const avg = days.reduce((s, d) => s + d.peak_hour, 0) / days.length;
+      days.forEach((d) => (d.delta_hours = +(d.peak_hour - avg).toFixed(1)));
+      return { grid_id: gridId, as_of: new Date().toISOString(), trailing_avg_peak_hour: +avg.toFixed(1), days, meta: { fallback: true } };
     }
-    const avg = days.reduce((s, d) => s + d.peak_hour, 0) / days.length;
-    days.forEach((d) => (d.delta_hours = +(d.peak_hour - avg).toFixed(1)));
-    return { grid_id: gridId, as_of: new Date().toISOString(), trailing_avg_peak_hour: +avg.toFixed(1), days, meta: { fallback: true } };
-  }
+  });
 }
 
 export async function getHotspots({ limit = 10, severity = 'HIGH', asOf } = {}) {
-  try {
-    const data = await request('/network/hotspots', { limit, severity, as_of: asOf });
-    return { ...data, meta: { fallback: false } };
-  } catch (err) {
-    console.warn('[api] getHotspots fallback:', err.message);
-    const rand = seededRandom(42);
-    const hotspots = Array.from({ length: limit }, (_, i) => {
-      const gridId = 100 + Math.floor(rand() * 9800);
-      return { grid_id: gridId, total_activity: 900 - i * 45 + rand() * 30, severity };
-    });
-    return { as_of: new Date().toISOString(), hotspots, meta: { fallback: true } };
-  }
+  const key = `hotspots:${limit}:${severity}:${asOf || 'latest'}`;
+  return withCache(key, asOf ? null : LIVE_TTL_MS, async () => {
+    try {
+      const data = await request('/network/hotspots', { limit, severity, as_of: asOf });
+      return { ...data, meta: { fallback: false } };
+    } catch (err) {
+      console.warn('[api] getHotspots fallback:', err.message);
+      const rand = seededRandom(42);
+      const hotspots = Array.from({ length: limit }, (_, i) => {
+        const gridId = 100 + Math.floor(rand() * 9800);
+        return { grid_id: gridId, total_activity: 900 - i * 45 + rand() * 30, severity };
+      });
+      return { as_of: new Date().toISOString(), hotspots, meta: { fallback: true } };
+    }
+  });
 }
 
 export async function getAlerts({ limit = 50, severity, asOf } = {}) {
-  try {
-    const data = await request('/network/alerts', { limit, severity, as_of: asOf });
-    return { ...data, meta: { fallback: false } };
-  } catch (err) {
-    console.warn('[api] getAlerts fallback:', err.message);
-    const rand = seededRandom(99);
-    const types = ['HIGH_ACTIVITY', 'ACTIVITY_SPIKE', 'ACTIVITY_DROP'];
-    const alerts = Array.from({ length: Math.min(limit, 8) }, (_, i) => {
-      const type = types[i % types.length];
-      const baseline = 200 + rand() * 150;
-      const ratio = type === 'ACTIVITY_DROP' ? 0.2 + rand() * 0.3 : 1.6 + rand() * 2.2;
-      return {
-        grid_id: 100 + Math.floor(rand() * 9800),
-        timestamp: new Date().toISOString(),
-        alert_type: type,
-        current_activity: baseline * ratio,
-        baseline_activity: baseline,
-        reason:
-          type === 'ACTIVITY_DROP'
-            ? `Current activity (${(baseline * ratio).toFixed(2)}) is ${ratio.toFixed(2)}x the within-day baseline (${baseline.toFixed(2)}).`
-            : `Current activity (${(baseline * ratio).toFixed(2)}) is ${ratio.toFixed(2)}x the within-day baseline (${baseline.toFixed(2)}).`,
-      };
-    });
-    return { as_of: new Date().toISOString(), alerts, meta: { fallback: true } };
-  }
+  const key = `alerts:${limit}:${severity || ''}:${asOf || 'latest'}`;
+  return withCache(key, asOf ? null : LIVE_TTL_MS, async () => {
+    try {
+      const data = await request('/network/alerts', { limit, severity, as_of: asOf });
+      return { ...data, meta: { fallback: false } };
+    } catch (err) {
+      console.warn('[api] getAlerts fallback:', err.message);
+      const rand = seededRandom(99);
+      const types = ['HIGH_ACTIVITY', 'ACTIVITY_SPIKE', 'ACTIVITY_DROP'];
+      const alerts = Array.from({ length: Math.min(limit, 8) }, (_, i) => {
+        const type = types[i % types.length];
+        const baseline = 200 + rand() * 150;
+        const ratio = type === 'ACTIVITY_DROP' ? 0.2 + rand() * 0.3 : 1.6 + rand() * 2.2;
+        return {
+          grid_id: 100 + Math.floor(rand() * 9800),
+          timestamp: new Date().toISOString(),
+          alert_type: type,
+          current_activity: baseline * ratio,
+          baseline_activity: baseline,
+          reason: `Current activity (${(baseline * ratio).toFixed(2)}) is ${ratio.toFixed(2)}x the within-day baseline (${baseline.toFixed(2)}).`,
+        };
+      });
+      return { as_of: new Date().toISOString(), alerts, meta: { fallback: true } };
+    }
+  });
 }
 
 // NEW: flat grid list with severity, powers the quick cell switcher / search
 export async function listGrids({ asOf, limit = 500 } = {}) {
-  try {
-    const data = await request('/network/grids', { as_of: asOf, limit });
-    return { ...data, meta: { fallback: false } };
-  } catch (err) {
-    console.warn('[api] listGrids fallback:', err.message);
-    const rand = seededRandom(7);
-    const grids = Array.from({ length: Math.min(limit, 400) }, (_, i) => {
-      const gridId = i * 25 + 1;
-      const activity = diurnalCurve(new Date().getHours(), gridId);
-      return { grid_id: gridId, total_activity: activity, severity: activity > 380 ? 'HIGH' : activity > 240 ? 'MEDIUM' : 'NORMAL' };
-    });
-    return { as_of: new Date().toISOString(), total: grids.length, grids, meta: { fallback: true } };
-  }
+  const key = `grids:${limit}:${asOf || 'latest'}`;
+  return withCache(key, asOf ? null : LIVE_TTL_MS, async () => {
+    try {
+      const data = await request('/network/grids', { as_of: asOf, limit });
+      return { ...data, meta: { fallback: false } };
+    } catch (err) {
+      console.warn('[api] listGrids fallback:', err.message);
+      const rand = seededRandom(7);
+      const grids = Array.from({ length: Math.min(limit, 400) }, (_, i) => {
+        const gridId = i * 25 + 1;
+        const activity = diurnalCurve(new Date().getHours(), gridId);
+        return { grid_id: gridId, total_activity: activity, severity: activity > 380 ? 'HIGH' : activity > 240 ? 'MEDIUM' : 'NORMAL' };
+      });
+      return { as_of: new Date().toISOString(), total: grids.length, grids, meta: { fallback: true } };
+    }
+  });
 }
 
 export default {
