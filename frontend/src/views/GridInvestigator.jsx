@@ -1,11 +1,12 @@
 import { useEffect, useState, useCallback } from 'react';
-import { MapPin, RefreshCw, CalendarDays, RotateCcw } from 'lucide-react';
+import { MapPin, RefreshCw, CalendarDays, Clock, RotateCcw } from 'lucide-react';
 import * as api from '../services/api';
 import PeakHourDial from '../components/PeakHourDial';
 import ActivityConfidenceBand from '../components/ActivityConfidenceBand';
 import ModalityDecomposition from '../components/ModalityDecomposition';
 import TrafficDynamics from '../components/TrafficDynamics';
 import GridFingerprint from '../components/GridFingerprint';
+import ActivityPrediction from '../components/ActivityPrediction';
 
 export default function GridInvestigator({ gridId }) {
   const [timeseries, setTimeseries] = useState([]);
@@ -13,30 +14,39 @@ export default function GridInvestigator({ gridId }) {
   const [features, setFeatures] = useState(null);
   const [weekly, setWeekly] = useState(null);
   const [geo, setGeo] = useState(null);
+  const [prediction, setPrediction] = useState(null);
   const [loading, setLoading] = useState(true);
   const [usingFallback, setUsingFallback] = useState(false);
   const [selectedDate, setSelectedDate] = useState(''); // '' = latest/live window
+  const [selectedHour, setSelectedHour] = useState('23'); // only applied when a date is also picked
 
-  const asOfParam = selectedDate ? `${selectedDate}T23:00:00` : undefined;
+  const asOfParam = selectedDate ? `${selectedDate}T${selectedHour}:00:00` : undefined;
+
+  function resetToLatest() {
+    setSelectedDate('');
+    setSelectedHour('23');
+  }
 
   const load = useCallback(async () => {
     setLoading(true);
-    const [tsRes, modRes, featRes, weeklyRes, geoRes] = await Promise.all([
+    const [tsRes, modRes, featRes, weeklyRes, geoRes, predRes] = await Promise.all([
       api.getGridTimeseries(gridId, selectedDate ? { date: selectedDate } : {}),
       api.getGridModality(gridId, selectedDate ? { date: selectedDate } : { hours: 24 }),
       api.getGridFeatures(gridId, asOfParam),
       api.getWeeklyPeak(gridId, asOfParam),
       api.getGridGeography(gridId),
+      api.getGridPrediction(gridId, asOfParam),
     ]);
     setTimeseries(tsRes.timeseries || []);
     setModality(modRes.hours || []);
     setFeatures(featRes);
     setWeekly(weeklyRes);
     setGeo(geoRes);
-    setUsingFallback([tsRes, modRes, featRes, weeklyRes, geoRes].some((r) => r.meta?.fallback));
+    setPrediction(predRes);
+    setUsingFallback([tsRes, modRes, featRes, weeklyRes, geoRes, predRes].some((r) => r.meta?.fallback));
     setLoading(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gridId, selectedDate]);
+  }, [gridId, selectedDate, selectedHour]);
 
   useEffect(() => {
     load();
@@ -67,8 +77,23 @@ export default function GridInvestigator({ gridId }) {
               className="bg-transparent font-mono text-[11px] text-slate-200 focus:outline-none [color-scheme:dark]"
             />
           </div>
+          <div className={`flex items-center gap-1.5 rounded border border-slate-800 bg-slate-900/70 px-2 py-1 ${!selectedDate ? 'opacity-40' : ''}`}>
+            <Clock size={12} className="text-slate-500" />
+            <select
+              value={selectedHour}
+              disabled={!selectedDate}
+              onChange={(e) => setSelectedHour(e.target.value)}
+              className="bg-transparent font-mono text-[11px] text-slate-200 focus:outline-none disabled:cursor-not-allowed [color-scheme:dark]"
+            >
+              {Array.from({ length: 24 }, (_, h) => String(h).padStart(2, '0')).map((h) => (
+                <option key={h} value={h} className="bg-slate-900">
+                  {h}:00
+                </option>
+              ))}
+            </select>
+          </div>
           {selectedDate && (
-            <button onClick={() => setSelectedDate('')} className="flex items-center gap-1 rounded border border-slate-800 bg-slate-800/60 px-2 py-1 text-[10px] text-slate-300 hover:text-cyan-300">
+            <button onClick={resetToLatest} className="flex items-center gap-1 rounded border border-slate-800 bg-slate-800/60 px-2 py-1 text-[10px] text-slate-300 hover:text-cyan-300">
               <RotateCcw size={11} /> Latest
             </button>
           )}
@@ -82,7 +107,13 @@ export default function GridInvestigator({ gridId }) {
         </div>
       </div>
 
-      {/* Diagnostic first: is this cell behaving abnormally right now? */}
+      {/* Forward-looking first: is this cell about to spike? */}
+      <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+        <h2 className="mb-3 text-sm font-medium text-slate-200">Predicted Activity Risk</h2>
+        <ActivityPrediction prediction={prediction} loading={loading} />
+      </div>
+
+      {/* Diagnostic next: is this cell behaving abnormally right now? */}
       <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
         <h2 className="mb-3 text-sm font-medium text-slate-200">Activity vs Baseline Confidence Band</h2>
         <ActivityConfidenceBand timeseries={timeseries} />

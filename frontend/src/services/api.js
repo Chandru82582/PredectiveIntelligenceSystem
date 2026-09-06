@@ -308,11 +308,12 @@ export async function getHotspots({ limit = 10, severity = 'HIGH', asOf } = {}) 
     } catch (err) {
       console.warn('[api] getHotspots fallback:', err.message);
       const rand = seededRandom(42);
+      const now = new Date().toISOString();
       const hotspots = Array.from({ length: limit }, (_, i) => {
         const gridId = 100 + Math.floor(rand() * 9800);
-        return { grid_id: gridId, total_activity: 900 - i * 45 + rand() * 30, severity };
+        return { grid_id: gridId, total_activity: 900 - i * 45 + rand() * 30, severity, timestamp: now };
       });
-      return { as_of: new Date().toISOString(), hotspots, meta: { fallback: true } };
+      return { as_of: now, hotspots, meta: { fallback: true } };
     }
   });
 }
@@ -345,6 +346,41 @@ export async function getAlerts({ limit = 50, severity, asOf } = {}) {
   });
 }
 
+// NEW: next-hour high-activity risk prediction (LightGBM model served by
+// backend/ml_model.py), powers the Grid Investigator's Prediction panel.
+export async function getGridPrediction(gridId, asOf) {
+  const key = `predict:${gridId}:${asOf || 'latest'}`;
+  return withCache(key, asOf ? null : LIVE_TTL_MS, async () => {
+    try {
+      const data = await request(`/predict/grid/${gridId}`, { as_of: asOf });
+      return { ...data, meta: { fallback: false } };
+    } catch (err) {
+      console.warn('[api] getGridPrediction fallback:', err.message);
+      const rand = seededRandom(gridId * 13 + 5);
+      const probability = Math.min(0.97, Math.max(0.01, rand() * 0.9));
+      const threshold = 0.5;
+      return {
+        grid_id: gridId,
+        as_of: new Date().toISOString(),
+        feature_timestamp: new Date().toISOString(),
+        probability,
+        prediction: probability >= threshold ? 1 : 0,
+        risk_label: probability >= threshold ? 'HIGH_ACTIVITY_RISK' : 'NORMAL',
+        threshold,
+        data_points_used: 48,
+        features: {
+          activity_growth: 0.9 + (rand() - 0.5) * 0.6,
+          variability: 0.2 + rand() * 0.4,
+          peak_ratio: 1.2 + rand() * 1.2,
+          internet_share: 0.4 + rand() * 0.3,
+          current_to_baseline_ratio: 0.8 + rand() * 1.4,
+        },
+        meta: { fallback: true },
+      };
+    }
+  });
+}
+
 // NEW: flat grid list with severity, powers the quick cell switcher / search
 export async function listGrids({ asOf, limit = 500 } = {}) {
   const key = `grids:${limit}:${asOf || 'latest'}`;
@@ -365,6 +401,175 @@ export async function listGrids({ asOf, limit = 500 } = {}) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Data Explorer — filterable/paginated raw rows off each backing table.
+// ---------------------------------------------------------------------------
+
+const DATA_TTL_MS = 15_000; // short: filters/pagination change constantly, but repeat clicks (e.g. re-sorting back) shouldn't always round-trip
+
+function fallbackDataPage({ page = 1, pageSize = 50, totalRows = 4200, rowFactory }) {
+  const total = totalRows;
+  const start = (page - 1) * pageSize;
+  const records = Array.from({ length: Math.max(0, Math.min(pageSize, total - start)) }, (_, i) => rowFactory(start + i));
+  return { total, page, page_size: pageSize, records, meta: { fallback: true } };
+}
+
+function fallbackHourlyRow(i) {
+  const gridId = (i % 400) * 25 + 1;
+  const daysAgo = Math.floor(i / 400 / 24);
+  const hour = i % 24;
+  const d = new Date(Date.now() - daysAgo * 86400000);
+  const total = diurnalCurve(hour, gridId);
+  return {
+    id: i + 1,
+    date: d.toISOString().slice(0, 10),
+    hour,
+    grid_id: gridId,
+    sms_in: total * 0.09,
+    sms_out: total * 0.09,
+    call_in: total * 0.14,
+    call_out: total * 0.13,
+    internet_activity: total * 0.55,
+    total_activity: total,
+    record_count: 20 + (i % 30),
+    loaded_at: d.toISOString(),
+  };
+}
+
+export async function getHourlyData(filters = {}) {
+  const key = `data:hourly:${JSON.stringify(filters)}`;
+  return withCache(key, DATA_TTL_MS, async () => {
+    try {
+      const data = await request('/data/hourly', filters);
+      return { ...data, meta: { fallback: false } };
+    } catch (err) {
+      console.warn('[api] getHourlyData fallback:', err.message);
+      return fallbackDataPage({ page: filters.page, pageSize: filters.page_size, rowFactory: fallbackHourlyRow });
+    }
+  });
+}
+
+export async function getSpatialData(filters = {}) {
+  const key = `data:spatial:${JSON.stringify(filters)}`;
+  return withCache(key, DATA_TTL_MS, async () => {
+    try {
+      const data = await request('/data/spatial', filters);
+      return { ...data, meta: { fallback: false } };
+    } catch (err) {
+      console.warn('[api] getSpatialData fallback:', err.message);
+      return fallbackDataPage({
+        page: filters.page,
+        pageSize: filters.page_size,
+        rowFactory: (i) => {
+          const row = fallbackHourlyRow(i);
+          const { record_count, ...rest } = row;
+          return { ...rest, has_geometry: i % 3 === 0 };
+        },
+      });
+    }
+  });
+}
+
+export async function getGridSummaryData(filters = {}) {
+  const key = `data:grid-summary:${JSON.stringify(filters)}`;
+  return withCache(key, DATA_TTL_MS, async () => {
+    try {
+      const data = await request('/data/grid-summary', filters);
+      return { ...data, meta: { fallback: false } };
+    } catch (err) {
+      console.warn('[api] getGridSummaryData fallback:', err.message);
+      return fallbackDataPage({
+        page: filters.page,
+        pageSize: filters.page_size,
+        totalRows: 9800,
+        rowFactory: (i) => {
+          const gridId = (i % 400) * 25 + 1;
+          const daysAgo = Math.floor(i / 400);
+          const d = new Date(Date.now() - daysAgo * 86400000);
+          const rand = seededRandom(gridId * 17 + daysAgo);
+          const total = 3000 + rand() * 4000;
+          return {
+            id: i + 1,
+            date: d.toISOString().slice(0, 10),
+            grid_id: gridId,
+            total_sms: total * 0.18,
+            total_calls: total * 0.27,
+            internet_usage: total * 0.55,
+            total_activity: total,
+            active_hours: 14 + Math.floor(rand() * 10),
+            loaded_at: d.toISOString(),
+          };
+        },
+      });
+    }
+  });
+}
+
+export async function getDailySummaryData(filters = {}) {
+  const key = `data:daily-summary:${JSON.stringify(filters)}`;
+  return withCache(key, DATA_TTL_MS, async () => {
+    try {
+      const data = await request('/data/daily-summary', filters);
+      return { ...data, meta: { fallback: false } };
+    } catch (err) {
+      console.warn('[api] getDailySummaryData fallback:', err.message);
+      return fallbackDataPage({
+        page: filters.page,
+        pageSize: filters.page_size,
+        totalRows: 60,
+        rowFactory: (i) => {
+          const d = new Date(Date.now() - i * 86400000);
+          const rand = seededRandom(i + 3);
+          const total = 260000 + rand() * 60000;
+          return {
+            id: i + 1,
+            date: d.toISOString().slice(0, 10),
+            total_sms: total * 0.18,
+            total_calls: total * 0.27,
+            internet_usage: total * 0.55,
+            total_activity: total,
+            active_grids: 6200 + Math.floor(rand() * 900),
+            total_records: 230000 + Math.floor(rand() * 20000),
+            loaded_at: d.toISOString(),
+          };
+        },
+      });
+    }
+  });
+}
+
+// NEW: pipeline ingestion audit trail (flow/logs/audit_log.json), powers
+// the Data page's Quality Check tab.
+export async function getAuditLogData(filters = {}) {
+  const key = `data:audit-log:${JSON.stringify(filters)}`;
+  return withCache(key, DATA_TTL_MS, async () => {
+    try {
+      const data = await request('/data/audit-log', filters);
+      return { ...data, meta: { fallback: false } };
+    } catch (err) {
+      console.warn('[api] getAuditLogData fallback:', err.message);
+      return fallbackDataPage({
+        page: filters.page,
+        pageSize: filters.page_size,
+        totalRows: 5,
+        rowFactory: (i) => {
+          const d = new Date(Date.now() - i * 3600000);
+          const rejected = i % 3 === 1;
+          return {
+            id: i + 1,
+            filename: `sms-call-internet-mi-2013-11-${String((i % 7) + 1).padStart(2, '0')}.csv`,
+            status: rejected ? 'REJECTED' : 'ACCEPTED',
+            row_count: rejected ? 0 : 1800000 + i * 15000,
+            reason: rejected ? 'Synthetic fallback — pipeline log unreachable.' : null,
+            processed_at: d.toISOString(),
+            duration_seconds: rejected ? null : 40 + i * 3.2,
+          };
+        },
+      });
+    }
+  });
+}
+
 export default {
   getNetworkSummary,
   getGridTimeseries,
@@ -375,6 +580,12 @@ export default {
   getWeeklyPeak,
   getHotspots,
   getAlerts,
+  getGridPrediction,
   listGrids,
+  getHourlyData,
+  getSpatialData,
+  getGridSummaryData,
+  getDailySummaryData,
+  getAuditLogData,
   QUICK_SWITCH_GRIDS,
 };

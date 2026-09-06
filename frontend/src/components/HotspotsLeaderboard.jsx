@@ -34,6 +34,11 @@ export default function HotspotsLeaderboard({ hotspots, geoByGrid, selectedGridI
               <div className="mt-0.5 truncate text-[10px] text-slate-500">
                 {geo ? `${geo.latitude.toFixed(3)}°N, ${geo.longitude.toFixed(3)}°E · ${geo.sector_label}` : 'Resolving coordinates…'}
               </div>
+              {h.timestamp && (
+                <div className="mt-0.5 font-mono text-[10px] text-slate-600">
+                  {new Date(h.timestamp).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}
+                </div>
+              )}
               <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-slate-800">
                 <div className="h-full rounded-full bg-gradient-to-r from-cyan-500 to-amber-400" style={{ width: `${(h.total_activity / max) * 100}%` }} />
               </div>

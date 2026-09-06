@@ -4,15 +4,23 @@ from auth import verify_api_key
 from datetime import datetime, date, timedelta
 from typing import List, Optional
 from sqlalchemy import  Column, Integer, Float, Date, DateTime, String, Index, func
-from database import HourlyGridSummary, EnrichedSpatialHourly, get_db
+from database import HourlyGridSummary, EnrichedSpatialHourly, GridSummary, DailySummary, get_db
 from schemas import (
     GridFeaturesResponse, AlertResponse, Alert, HotspotResponse, Hotspot,
     GridActivityResponse, GridActivity, NetworkSummaryResponse,
     GridGeography, GridGeographyResponse, DailyPeak, WeeklyPeakResponse,
     ModalityHour, ModalityResponse, GridListItem, GridListResponse,
+    PredictionResponse,
+    HourlyGridRecord, HourlyGridRecordsResponse,
+    SpatialHourlyRecord, SpatialHourlyRecordsResponse,
+    GridSummaryRecord, GridSummaryRecordsResponse,
+    DailySummaryRecord, DailySummaryRecordsResponse,
+    AuditLogEntry, AuditLogResponse,
 )
+from pathlib import Path
 import pandas as pd
 from rules import AlertAnalyzer
+from ml_model import get_predictor
 import math
 import json
 import re
@@ -285,7 +293,7 @@ def get_hotspots(
     ).order_by(HourlyGridSummary.total_activity.desc()).limit(limit).all()
     
     hotspots = [
-        Hotspot(grid_id=r.grid_id, total_activity=r.total_activity, severity=severity) 
+        Hotspot(grid_id=r.grid_id, total_activity=r.total_activity, severity=severity, timestamp=effective_time)
         for r in records
     ]
     return HotspotResponse(as_of=effective_time, hotspots=hotspots)
@@ -484,7 +492,7 @@ def get_grids_geography(
 
 
 @router.get("/network/grid/{grid_id}/weekly-peak", response_model=WeeklyPeakResponse)
-def get_weekly_peak(grid_id: int, as_of: Optional[datetime] = None, db: Session = Depends(get_db)):
+def get_weekly_peak(grid_id: int, as_of: Optional[datetime] = None, db: Session = Depends(get_db)):     
     """Trailing 7-day peak-hour-per-day series for the Peak Hour Dial's
     'Week View' horizon ribbon, including drift vs the trailing average."""
     validate_grid_id(grid_id)
@@ -603,3 +611,407 @@ def list_grids(
 
     grids = [GridListItem(grid_id=r.grid_id, total_activity=r.total_activity, severity=severity_for(r.total_activity)) for r in rows]
     return GridListResponse(as_of=effective_time, total=len(grids), grids=grids)
+
+
+# =====================================================================
+# PREDICTION ENDPOINT — serves the trained LightGBM "next-hour high
+# activity" classifier (DataAnalysis/models/lgbm_high_activity_v1.joblib)
+# via ml_model.py, which mirrors DataAnalysis/preprocessor.py's feature
+# engineering so training and serving stay identical.
+# =====================================================================
+
+# Rolling/lag features need >=24 prior hourly rows (see ml_model.py); this
+# lookback pulls extra margin so a few missing hours in the source data
+# don't push the effective history below that requirement.
+_PREDICTION_LOOKBACK_HOURS = 95
+
+
+@router.get("/predict/grid/{grid_id}", response_model=PredictionResponse)
+def predict_grid_activity(
+    grid_id: int,
+    as_of: Optional[datetime] = None,
+    db: Session = Depends(get_db),
+):
+    """Predicts whether `grid_id` is likely to enter a high-activity state
+    (>=1.5x its within-day baseline) in the hour *following* `as_of`, using
+    its trailing hourly history up to and including `as_of`."""
+    validate_grid_id(grid_id)
+    effective_time = resolve_as_of(db, as_of)
+    start_time = effective_time - timedelta(hours=_PREDICTION_LOOKBACK_HOURS)
+
+    query = db.query(HourlyGridSummary).filter(
+        HourlyGridSummary.grid_id == grid_id,
+        HourlyGridSummary.date >= start_time.date(),
+        HourlyGridSummary.date <= effective_time.date(),
+    )
+    df = pd.read_sql(query.statement, query.session.bind)
+    if df.empty:
+        raise HTTPException(status_code=404, detail="No data found for grid")
+
+    df["timestamp"] = pd.to_datetime(df["date"]) + pd.to_timedelta(df["hour"], unit="h")
+    df = df[(df["timestamp"] >= start_time) & (df["timestamp"] <= effective_time)].sort_values("timestamp")
+    if df.empty:
+        raise HTTPException(status_code=404, detail="No data found in requested window")
+
+    # Map hourly_grid_summary's columns onto the raw schema DataPreprocessor expects.
+    raw_df = pd.DataFrame({
+        "timestamp": df["timestamp"],
+        "grid_id": df["grid_id"],
+        "sms_in_count": df["sms_in"],
+        "sms_out_count": df["sms_out"],
+        "call_in_count": df["call_in"],
+        "call_out_count": df["call_out"],
+        "internet_usage": df["internet_activity"],
+        "total_sms": df["sms_in"] + df["sms_out"],
+        "total_calls": df["call_in"] + df["call_out"],
+        "total_activity": df["total_activity"],
+    })
+
+    predictor = get_predictor()
+    result = predictor.predict_latest(raw_df)
+    if result is None:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Not enough trailing history to compute a prediction for grid {grid_id} "
+                f"(need at least {predictor.MIN_HISTORY_HOURS}h of prior hourly data)."
+            ),
+        )
+
+    return PredictionResponse(
+        grid_id=grid_id,
+        as_of=effective_time,
+        feature_timestamp=result["feature_timestamp"],
+        probability=float(result["probability"]),
+        prediction=int(result["prediction"]),
+        risk_label=result["risk_label"],
+        threshold=predictor.threshold,
+        data_points_used=len(df),
+        features={col: float(result[col]) for col in predictor.feature_columns if col != "grid_id"},
+    )
+
+
+# =====================================================================
+# DATA EXPLORER ENDPOINTS — filterable/paginated raw rows off each
+# backing table, for the "Data" page. One endpoint per table rather than
+# one generic endpoint so each gets typed filters/columns that actually
+# make sense for it (e.g. `hour` doesn't exist on daily_summary).
+# =====================================================================
+
+_MAX_PAGE_SIZE = 500
+
+
+def _validate_sort(sort_by: str, sort_dir: str, allowed: set, model):
+    if sort_by not in allowed:
+        raise HTTPException(status_code=400, detail=f"sort_by must be one of: {sorted(allowed)}")
+    if sort_dir not in ("asc", "desc"):
+        raise HTTPException(status_code=400, detail="sort_dir must be 'asc' or 'desc'")
+    col = getattr(model, sort_by)
+    return col.desc() if sort_dir == "desc" else col.asc()
+
+
+def _paginate(query, page: int, page_size: int):
+    total = query.count()
+    rows = query.offset((page - 1) * page_size).limit(page_size).all()
+    return total, rows
+
+
+_HOURLY_SORT_COLUMNS = {"date", "hour", "grid_id", "total_activity", "sms_in", "sms_out", "call_in", "call_out", "internet_activity"}
+
+
+@router.get("/data/hourly", response_model=HourlyGridRecordsResponse)
+def get_hourly_data(
+    grid_id: Optional[int] = None,
+    date_from: Optional[date] = None,
+    date_to: Optional[date] = None,
+    hour_min: Optional[int] = Query(None, ge=0, le=23),
+    hour_max: Optional[int] = Query(None, ge=0, le=23),
+    min_activity: Optional[float] = None,
+    max_activity: Optional[float] = None,
+    sort_by: str = "date",
+    sort_dir: str = "desc",
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=_MAX_PAGE_SIZE),
+    db: Session = Depends(get_db),
+):
+    """Raw hourly_grid_summary rows — the finest-grained table available,
+    one row per (date, hour, grid_id)."""
+    query = db.query(HourlyGridSummary)
+    if grid_id is not None:
+        query = query.filter(HourlyGridSummary.grid_id == grid_id)
+    if date_from is not None:
+        query = query.filter(HourlyGridSummary.date >= date_from)
+    if date_to is not None:
+        query = query.filter(HourlyGridSummary.date <= date_to)
+    if hour_min is not None:
+        query = query.filter(HourlyGridSummary.hour >= hour_min)
+    if hour_max is not None:
+        query = query.filter(HourlyGridSummary.hour <= hour_max)
+    if min_activity is not None:
+        query = query.filter(HourlyGridSummary.total_activity >= min_activity)
+    if max_activity is not None:
+        query = query.filter(HourlyGridSummary.total_activity <= max_activity)
+
+    order = _validate_sort(sort_by, sort_dir, _HOURLY_SORT_COLUMNS, HourlyGridSummary)
+    query = query.order_by(order, HourlyGridSummary.id.asc())
+
+    total, rows = _paginate(query, page, page_size)
+    records = [
+        HourlyGridRecord(
+            id=r.id, date=r.date, hour=r.hour, grid_id=r.grid_id,
+            sms_in=r.sms_in, sms_out=r.sms_out, call_in=r.call_in, call_out=r.call_out,
+            internet_activity=r.internet_activity, total_activity=r.total_activity,
+            record_count=r.record_count, loaded_at=r.loaded_at,
+        )
+        for r in rows
+    ]
+    return HourlyGridRecordsResponse(total=total, page=page, page_size=page_size, records=records)
+
+
+_SPATIAL_SORT_COLUMNS = {"date", "hour", "grid_id", "total_activity", "sms_in", "sms_out", "call_in", "call_out", "internet_activity"}
+
+
+@router.get("/data/spatial", response_model=SpatialHourlyRecordsResponse)
+def get_spatial_data(
+    grid_id: Optional[int] = None,
+    date_from: Optional[date] = None,
+    date_to: Optional[date] = None,
+    hour_min: Optional[int] = Query(None, ge=0, le=23),
+    hour_max: Optional[int] = Query(None, ge=0, le=23),
+    min_activity: Optional[float] = None,
+    max_activity: Optional[float] = None,
+    has_geometry: Optional[bool] = None,
+    sort_by: str = "date",
+    sort_dir: str = "desc",
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=_MAX_PAGE_SIZE),
+    db: Session = Depends(get_db),
+):
+    """enriched_spatial_hourly rows (activity + geometry provenance). The
+    raw `geometry` payload is large/opaque, so this only reports whether
+    each row carries real geometry — see /network/grid/{grid_id}/geography
+    for the parsed lat/lon."""
+    query = db.query(EnrichedSpatialHourly)
+    if grid_id is not None:
+        query = query.filter(EnrichedSpatialHourly.grid_id == grid_id)
+    if date_from is not None:
+        query = query.filter(EnrichedSpatialHourly.date >= date_from)
+    if date_to is not None:
+        query = query.filter(EnrichedSpatialHourly.date <= date_to)
+    if hour_min is not None:
+        query = query.filter(EnrichedSpatialHourly.hour >= hour_min)
+    if hour_max is not None:
+        query = query.filter(EnrichedSpatialHourly.hour <= hour_max)
+    if min_activity is not None:
+        query = query.filter(EnrichedSpatialHourly.total_activity >= min_activity)
+    if max_activity is not None:
+        query = query.filter(EnrichedSpatialHourly.total_activity <= max_activity)
+    if has_geometry is not None:
+        query = query.filter(EnrichedSpatialHourly.geometry.isnot(None) if has_geometry else EnrichedSpatialHourly.geometry.is_(None))
+
+    order = _validate_sort(sort_by, sort_dir, _SPATIAL_SORT_COLUMNS, EnrichedSpatialHourly)
+    query = query.order_by(order, EnrichedSpatialHourly.id.asc())
+
+    total, rows = _paginate(query, page, page_size)
+    records = [
+        SpatialHourlyRecord(
+            id=r.id, date=r.date, hour=r.hour, grid_id=r.grid_id,
+            sms_in=r.sms_in, sms_out=r.sms_out, call_in=r.call_in, call_out=r.call_out,
+            internet_activity=r.internet_activity, total_activity=r.total_activity,
+            has_geometry=bool(r.geometry), loaded_at=r.loaded_at,
+        )
+        for r in rows
+    ]
+    return SpatialHourlyRecordsResponse(total=total, page=page, page_size=page_size, records=records)
+
+
+_GRID_SUMMARY_SORT_COLUMNS = {"date", "grid_id", "total_activity", "total_sms", "total_calls", "internet_usage", "active_hours"}
+
+
+@router.get("/data/grid-summary", response_model=GridSummaryRecordsResponse)
+def get_grid_summary_data(
+    grid_id: Optional[int] = None,
+    date_from: Optional[date] = None,
+    date_to: Optional[date] = None,
+    min_activity: Optional[float] = None,
+    max_activity: Optional[float] = None,
+    sort_by: str = "date",
+    sort_dir: str = "desc",
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=_MAX_PAGE_SIZE),
+    db: Session = Depends(get_db),
+):
+    """grid_summary rows — per-day, per-grid rollup."""
+    query = db.query(GridSummary)
+    if grid_id is not None:
+        query = query.filter(GridSummary.grid_id == grid_id)
+    if date_from is not None:
+        query = query.filter(GridSummary.date >= date_from)
+    if date_to is not None:
+        query = query.filter(GridSummary.date <= date_to)
+    if min_activity is not None:
+        query = query.filter(GridSummary.total_activity >= min_activity)
+    if max_activity is not None:
+        query = query.filter(GridSummary.total_activity <= max_activity)
+
+    order = _validate_sort(sort_by, sort_dir, _GRID_SUMMARY_SORT_COLUMNS, GridSummary)
+    query = query.order_by(order, GridSummary.id.asc())
+
+    total, rows = _paginate(query, page, page_size)
+    records = [
+        GridSummaryRecord(
+            id=r.id, date=r.date, grid_id=r.grid_id, total_sms=r.total_sms, total_calls=r.total_calls,
+            internet_usage=r.internet_usage, total_activity=r.total_activity, active_hours=r.active_hours,
+            loaded_at=r.loaded_at,
+        )
+        for r in rows
+    ]
+    return GridSummaryRecordsResponse(total=total, page=page, page_size=page_size, records=records)
+
+
+_DAILY_SUMMARY_SORT_COLUMNS = {"date", "total_activity", "total_sms", "total_calls", "internet_usage", "active_grids", "total_records"}
+
+
+@router.get("/data/daily-summary", response_model=DailySummaryRecordsResponse)
+def get_daily_summary_data(
+    date_from: Optional[date] = None,
+    date_to: Optional[date] = None,
+    min_activity: Optional[float] = None,
+    max_activity: Optional[float] = None,
+    sort_by: str = "date",
+    sort_dir: str = "desc",
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=_MAX_PAGE_SIZE),
+    db: Session = Depends(get_db),
+):
+    """daily_summary rows — network-wide per-day rollup."""
+    query = db.query(DailySummary)
+    if date_from is not None:
+        query = query.filter(DailySummary.date >= date_from)
+    if date_to is not None:
+        query = query.filter(DailySummary.date <= date_to)
+    if min_activity is not None:
+        query = query.filter(DailySummary.total_activity >= min_activity)
+    if max_activity is not None:
+        query = query.filter(DailySummary.total_activity <= max_activity)
+
+    order = _validate_sort(sort_by, sort_dir, _DAILY_SUMMARY_SORT_COLUMNS, DailySummary)
+    query = query.order_by(order, DailySummary.id.asc())
+
+    total, rows = _paginate(query, page, page_size)
+    records = [
+        DailySummaryRecord(
+            id=r.id, date=r.date, total_sms=r.total_sms, total_calls=r.total_calls,
+            internet_usage=r.internet_usage, total_activity=r.total_activity,
+            active_grids=r.active_grids, total_records=r.total_records, loaded_at=r.loaded_at,
+        )
+        for r in rows
+    ]
+    return DailySummaryRecordsResponse(total=total, page=page, page_size=page_size, records=records)
+
+
+# =====================================================================
+# QUALITY CHECK — the Spark pipeline's file-ingestion audit trail
+# (flow/logs/audit_log.json, one JSON object per line), surfaced as a
+# filterable/paginated table alongside the DB-backed ones above. Read
+# straight off disk (mtime-cached) since this isn't in the database.
+# =====================================================================
+
+_AUDIT_LOG_PATH = Path(__file__).resolve().parent.parent / "flow" / "logs" / "audit_log.json"
+_audit_log_cache = {"mtime": None, "rows": []}
+
+
+def _load_audit_log_rows():
+    try:
+        mtime = _AUDIT_LOG_PATH.stat().st_mtime
+    except OSError:
+        return []
+    if _audit_log_cache["mtime"] == mtime:
+        return _audit_log_cache["rows"]
+
+    rows = []
+    with open(_AUDIT_LOG_PATH, "r", encoding="utf-8") as f:
+        for i, line in enumerate(f, start=1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            entry["id"] = i
+            rows.append(entry)
+
+    _audit_log_cache["mtime"] = mtime
+    _audit_log_cache["rows"] = rows
+    return rows
+
+
+def _audit_sort_value(row: dict, key: str):
+    value = row.get(key)
+    if value is not None:
+        return value
+    # Missing duration_seconds/reason (some REJECTED entries lack them) needs
+    # a same-typed fallback so every row is comparable during sort.
+    if key == "duration_seconds":
+        return -1.0
+    if key == "row_count":
+        return 0
+    return ""
+
+
+_AUDIT_LOG_SORT_COLUMNS = {"processed_at", "filename", "status", "row_count", "duration_seconds"}
+
+
+@router.get("/data/audit-log", response_model=AuditLogResponse)
+def get_audit_log_data(
+    status: Optional[str] = None,
+    filename: Optional[str] = None,
+    date_from: Optional[date] = None,
+    date_to: Optional[date] = None,
+    sort_by: str = "processed_at",
+    sort_dir: str = "desc",
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=_MAX_PAGE_SIZE),
+):
+    """Pipeline ingestion quality-check log — one row per file processing
+    attempt (ACCEPTED/REJECTED), with the rejection reason when it failed."""
+    rows = _load_audit_log_rows()
+
+    if status:
+        rows = [r for r in rows if (r.get("status") or "").upper() == status.upper()]
+    if filename:
+        needle = filename.lower()
+        rows = [r for r in rows if needle in (r.get("filename") or "").lower()]
+    if date_from is not None or date_to is not None:
+        def _in_range(r):
+            ts = r.get("processed_at")
+            if not ts:
+                return False
+            d = datetime.fromisoformat(ts).date()
+            if date_from is not None and d < date_from:
+                return False
+            if date_to is not None and d > date_to:
+                return False
+            return True
+        rows = [r for r in rows if _in_range(r)]
+
+    if sort_by not in _AUDIT_LOG_SORT_COLUMNS:
+        raise HTTPException(status_code=400, detail=f"sort_by must be one of: {sorted(_AUDIT_LOG_SORT_COLUMNS)}")
+    if sort_dir not in ("asc", "desc"):
+        raise HTTPException(status_code=400, detail="sort_dir must be 'asc' or 'desc'")
+    rows = sorted(rows, key=lambda r: _audit_sort_value(r, sort_by), reverse=(sort_dir == "desc"))
+
+    total = len(rows)
+    start = (page - 1) * page_size
+    page_rows = rows[start:start + page_size]
+
+    records = [
+        AuditLogEntry(
+            id=r["id"], filename=r.get("filename", ""), status=r.get("status", ""),
+            row_count=r.get("row_count", 0), reason=r.get("reason"),
+            processed_at=r.get("processed_at"), duration_seconds=r.get("duration_seconds"),
+        )
+        for r in page_rows
+    ]
+    return AuditLogResponse(total=total, page=page, page_size=page_size, records=records)

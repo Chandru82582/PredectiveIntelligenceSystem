@@ -31,7 +31,12 @@ export default function AnomalyFeed({ alerts, onSelectGrid }) {
                 <span className="font-mono text-[12px] text-slate-100">GRID #{a.grid_id}</span>
                 <span className={`shrink-0 rounded px-1.5 py-0.5 font-mono text-[10px] ${meta.color}`}>{ratio.toFixed(2)}x</span>
               </div>
-              <div className="text-[10px] font-medium uppercase tracking-wide text-slate-500">{meta.label}</div>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[10px] font-medium uppercase tracking-wide text-slate-500">{meta.label}</span>
+                <span className="shrink-0 font-mono text-[10px] text-slate-600">
+                  {new Date(a.timestamp).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}
+                </span>
+              </div>
               <div className="mt-1 text-[11px] leading-snug text-slate-400">{a.reason}</div>
               <div className="mt-1 flex gap-3 font-mono text-[10px] text-slate-500">
                 <span>current {a.current_activity.toFixed(1)}</span>

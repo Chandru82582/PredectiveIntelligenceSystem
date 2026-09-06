@@ -3,6 +3,7 @@ import { RadioTower, Search, CircleDot } from 'lucide-react';
 import * as api from './services/api';
 import NetworkOverview from './views/NetworkOverview';
 import GridInvestigator from './views/GridInvestigator';
+import DataExplorer from './views/DataExplorer';
 
 export default function App() {
   const [tab, setTab] = useState('overview');
@@ -43,13 +44,14 @@ export default function App() {
         <div className="mx-auto flex max-w-[1400px] flex-wrap items-center gap-4 px-5 py-3">
           <div className="flex items-center gap-2">
             <RadioTower size={18} className="text-cyan-400" />
-            <span className="text-sm font-semibold tracking-wide text-slate-100">NOC · Telemetry</span>
+            <span className="text-sm font-semibold tracking-wide text-slate-100">Telecom Activity Intelligence</span>
           </div>
 
           <nav className="flex rounded-full border border-slate-800 bg-slate-900/70 p-0.5">
             {[
               { id: 'overview', label: 'Network Overview & Map' },
               { id: 'investigator', label: 'Grid Investigator' },
+              { id: 'data', label: 'Data' },
             ].map((t) => (
               <button
                 key={t.id}
@@ -102,11 +104,9 @@ export default function App() {
       </header>
 
       <main className="mx-auto max-w-[1400px] px-5 py-6">
-        {tab === 'overview' ? (
-          <NetworkOverview selectedGridId={selectedGridId} onSelectGrid={goToGrid} />
-        ) : (
-          <GridInvestigator gridId={selectedGridId} />
-        )}
+        {tab === 'overview' && <NetworkOverview selectedGridId={selectedGridId} onSelectGrid={goToGrid} />}
+        {tab === 'investigator' && <GridInvestigator gridId={selectedGridId} />}
+        {tab === 'data' && <DataExplorer onSelectGrid={goToGrid} />}
       </main>
     </div>
   );

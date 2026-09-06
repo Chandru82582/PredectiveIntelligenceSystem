@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field
 from datetime import datetime, date, timedelta
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 
 
@@ -27,6 +27,7 @@ class Hotspot(BaseModel):
     grid_id: int
     total_activity: float
     severity: str
+    timestamp: datetime  # the hour this ranking reflects (shared by every hotspot in a response)
 
 class HotspotResponse(BaseModel):
     as_of: datetime
@@ -102,3 +103,108 @@ class GridFeaturesResponse(BaseModel):
     internet_share: float
     feature_timestamp: datetime
     data_quality: str
+
+class PredictionResponse(BaseModel):
+    grid_id: int
+    as_of: datetime
+    feature_timestamp: datetime  # timestamp the prediction's trailing features were computed as-of
+    probability: float  # model's predicted probability that the *next* hour is high-activity
+    prediction: int  # 1 = high-activity risk, 0 = normal (probability thresholded at `threshold`)
+    risk_label: str  # "HIGH_ACTIVITY_RISK" or "NORMAL"
+    threshold: float  # decision threshold used (model's F1-optimal threshold)
+    data_points_used: int  # trailing hourly rows available for this grid in the lookback window
+    features: Dict[str, float]  # the engineered feature values fed to the model
+
+# =====================================================================
+# DATA EXPLORER — raw/near-raw rows straight off each backing table, for
+# the "Data" page's filterable tables.
+# =====================================================================
+
+class HourlyGridRecord(BaseModel):
+    id: int
+    date: date
+    hour: int
+    grid_id: int
+    sms_in: float
+    sms_out: float
+    call_in: float
+    call_out: float
+    internet_activity: float
+    total_activity: float
+    record_count: int
+    loaded_at: datetime
+
+class HourlyGridRecordsResponse(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    records: List[HourlyGridRecord]
+
+class SpatialHourlyRecord(BaseModel):
+    id: int
+    date: date
+    hour: int
+    grid_id: int
+    sms_in: float
+    sms_out: float
+    call_in: float
+    call_out: float
+    internet_activity: float
+    total_activity: float
+    has_geometry: bool
+    loaded_at: datetime
+
+class SpatialHourlyRecordsResponse(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    records: List[SpatialHourlyRecord]
+
+class GridSummaryRecord(BaseModel):
+    id: int
+    date: date
+    grid_id: int
+    total_sms: float
+    total_calls: float
+    internet_usage: float
+    total_activity: float
+    active_hours: int
+    loaded_at: datetime
+
+class GridSummaryRecordsResponse(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    records: List[GridSummaryRecord]
+
+class DailySummaryRecord(BaseModel):
+    id: int
+    date: date
+    total_sms: float
+    total_calls: float
+    internet_usage: float
+    total_activity: float
+    active_grids: int
+    total_records: int
+    loaded_at: datetime
+
+class DailySummaryRecordsResponse(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    records: List[DailySummaryRecord]
+
+class AuditLogEntry(BaseModel):
+    id: int  # 1-indexed line number in flow/logs/audit_log.json, used as a stable row key
+    filename: str
+    status: str  # "ACCEPTED" or "REJECTED"
+    row_count: int
+    reason: Optional[str] = None
+    processed_at: datetime
+    duration_seconds: Optional[float] = None  # absent on some REJECTED entries (failed before completion)
+
+class AuditLogResponse(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    records: List[AuditLogEntry]

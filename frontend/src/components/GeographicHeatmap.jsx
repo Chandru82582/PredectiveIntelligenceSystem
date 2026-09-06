@@ -115,8 +115,8 @@ function MapControls({ severityFilter, setSeverityFilter, intensity, setIntensit
 }
 
 export default function GeographicHeatmap({ cells, selectedGridId, onSelectGrid }) {
-  const [intensity, setIntensity] = useState(0.75);
-  const [radius, setRadius] = useState(48);
+  const [intensity, setIntensity] = useState(0.65);
+  const [radius, setRadius] = useState(28);
   const [severityFilter, setSeverityFilter] = useState('ALL');
 
   const enriched = useMemo(() => {

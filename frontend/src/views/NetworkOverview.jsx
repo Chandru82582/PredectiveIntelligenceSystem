@@ -106,10 +106,10 @@ export default function NetworkOverview({ selectedGridId, onSelectGrid }) {
 
       {/* Temporal / scheduling context — lower urgency, used for planning
           maintenance windows rather than incident response. */}
-      <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+      {/* <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
         <h2 className="mb-3 text-sm font-medium text-slate-200">Diurnal Peak Dynamics — Grid #{summary?.top_grid ?? '—'}</h2>
         <PeakHourDial timeseries={dialTimeseries} weekly={weekly} />
-      </div>
+      </div> */}
     </div>
   );
 }
