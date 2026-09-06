@@ -97,6 +97,7 @@ def _staging_dirs(file_stem: str) -> Dict[str, Path]:
         "raw": STAGING_PATH / "raw" / file_stem,
         "clean": STAGING_PATH / "clean" / file_stem,
         "quarantine": STAGING_PATH / "quarantine" / file_stem,
+        "mysql": STAGING_PATH / "mysql" / file_stem,
     }
 
 @dag(
@@ -237,21 +238,21 @@ def telecom_landing_ingestion():
         return results
 
     @task
-    def spark_process(validate_results: List[Dict[str, Any]]) -> Dict[str, List[str]]:
+    def spark_process(validate_results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         pending = [r for r in validate_results if r.get("status") == "VALIDATED"]
-        summary = {"accepted": [], "rejected": [], "errors": []}
         if not pending:
             print("[spark_process] nothing to do")
-            return summary
+            return []
 
         pipeline = _new_pipeline()
+        results: List[Dict[str, Any]] = []
 
         try:
             for item in pending:
                 filename = item["filename"]
-                started_at = datetime.now()
-                print(f"[spark_process] finalizing {filename}")
+                print(f"[spark_process] aggregating & enriching {filename}")
                 held_path = PROCESSING_PATH / filename
+                stage = _staging_dirs(Path(filename).stem)
 
                 try:
                     clean_df = pipeline.spark.read.parquet(item["staging_clean"])
@@ -261,10 +262,17 @@ def telecom_landing_ingestion():
                     enriched_df, grid_ref_df = pipeline.enrich(aggregates["hourly_grid_summary"])
 
                     # Original DataFrames for Parquet writing (includes all metadata columns)
+                    # datasets = {
+                    #     "curated_usage": clean_df,
+                    #     "quarantine": quarantine_df,
+                    #     "hourly_grid_summary": aggregates["hourly_grid_summary"],
+                    #     "daily_summary": aggregates["daily_summary"],
+                    #     "grid_summary": aggregates["grid_summary"],
+                    #     "enriched_spatial_hourly": enriched_df,
+                    # }
                     datasets = {
                         "curated_usage": clean_df,
                         "quarantine": quarantine_df,
-                        "hourly_grid_summary": aggregates["hourly_grid_summary"],
                         "daily_summary": aggregates["daily_summary"],
                         "grid_summary": aggregates["grid_summary"],
                         "enriched_spatial_hourly": enriched_df,
@@ -274,38 +282,67 @@ def telecom_landing_ingestion():
                     pipeline.write_outputs(datasets=datasets)
                     pipeline.write_outputs({"grid_reference": grid_ref_df})
 
-                    # EXACT schema alignment for MySQL JDBC (Drop input_file_name, drop record_count from spatial, order columns)
-                    mysql_datasets = {
-                        "curated_usage": clean_df.select(
-                            "timestamp", "grid_id", "country_code", "sms_in_count", "sms_out_count", 
-                            "call_in_count", "call_out_count", "internet_usage", "date", "hour", 
-                            "day_of_week", "total_sms", "total_calls", "total_activity"
-                        ),
-                        "quarantine": quarantine_df.select(
-                            "timestamp", "grid_id", "country_code", "sms_in_count", "sms_out_count", 
-                            "call_in_count", "call_out_count", "internet_usage", "date", "quarantine_reason"
-                        ),
-                        "hourly_grid_summary": aggregates["hourly_grid_summary"].select(
-                            "date", "hour", "grid_id", "sms_in", "sms_out", "call_in", 
-                            "call_out", "internet_activity", "total_activity", "record_count"
-                        ),
-                        "daily_summary": aggregates["daily_summary"].select(
-                            "date", "total_sms", "total_calls", "internet_usage", 
-                            "total_activity", "active_grids", "total_records"
-                        ),
-                        "grid_summary": aggregates["grid_summary"].select(
-                            "date", "grid_id", "total_sms", "total_calls", 
-                            "internet_usage", "total_activity", "active_hours"
-                        ),
-                        "enriched_spatial_hourly": enriched_df.select(
-                            "date", "hour", "grid_id", "sms_in", "sms_out", 
-                            "call_in", "call_out", "internet_activity", "total_activity", "geometry"
-                        )
+                    # Stage MySQL-shaped datasets (exact table column layout) so the
+                    # separate mysql_ingest task can pick them up independently.
+                    staging_mysql_paths: Dict[str, str] = {}
+                    for table_name, columns in pipeline.TABLE_COLUMNS.items():
+                        if table_name not in datasets:
+                            continue
+                        aligned_path = stage["mysql"] / table_name
+                        datasets[table_name].select(*columns).write.mode("overwrite").parquet(str(aligned_path))
+                        staging_mysql_paths[table_name] = str(aligned_path)
+
+                    print(f"[spark_process] {filename}: aggregates staged for MySQL ingestion")
+                    results.append({
+                        "filename": filename,
+                        "status": "PROCESSED",
+                        "clean_rows": item["clean_rows"],
+                        "staging_mysql": staging_mysql_paths,
+                    })
+
+                except Exception as exc:
+                    print(f"[spark_process] FAILED on {filename}: {exc}")
+                    _reject_now(held_path, f"Final processing error: {exc}")
+                    results.append({"filename": filename, "status": "REJECTED"})
+                    shutil.rmtree(stage["mysql"], ignore_errors=True)
+
+                finally:
+                    # clean/quarantine staging is fully consumed by this task;
+                    # only the "mysql" staging dir survives into mysql_ingest.
+                    shutil.rmtree(stage["clean"], ignore_errors=True)
+                    shutil.rmtree(stage["quarantine"], ignore_errors=True)
+                    shutil.rmtree(stage["raw"], ignore_errors=True)
+        finally:
+            pipeline.spark.stop()
+
+        return results
+
+    @task
+    def mysql_ingest(spark_results: List[Dict[str, Any]]) -> Dict[str, List[str]]:
+        pending = [r for r in spark_results if r.get("status") == "PROCESSED"]
+        summary = {"accepted": [], "rejected": [], "errors": []}
+        if not pending:
+            print("[mysql_ingest] nothing to do")
+            return summary
+
+        pipeline = _new_pipeline()
+
+        try:
+            for item in pending:
+                filename = item["filename"]
+                started_at = datetime.now()
+                print(f"[mysql_ingest] upserting {filename} into MySQL")
+                held_path = PROCESSING_PATH / filename
+                mysql_stage_dir = _staging_dirs(Path(filename).stem)["mysql"]
+
+                try:
+                    datasets = {
+                        table_name: pipeline.spark.read.parquet(path)
+                        for table_name, path in item["staging_mysql"].items()
                     }
 
-                    # High-speed push directly to MySQL
-                    for table_name, df in mysql_datasets.items():
-                        pipeline.write_to_mysql(df, table_name=table_name)
+                    # Upsert-aware push to MySQL, decoupled from Parquet/ETL work.
+                    pipeline.ingest_to_mysql(datasets)
 
                     target = RAW_PATH / filename
                     if target.exists():
@@ -321,27 +358,26 @@ def telecom_landing_ingestion():
                         "duration_seconds": duration,
                     })
                     summary["accepted"].append(filename)
-                    
 
                 except Exception as exc:
-                    print(f"[spark_process] FAILED on {filename}: {exc}")
-                    _reject_now(held_path, f"Final processing error: {exc}")
+                    print(f"[mysql_ingest] FAILED on {filename}: {exc}")
+                    _reject_now(held_path, f"MySQL ingestion error: {exc}")
                     summary["errors"].append(filename)
 
                 finally:
-                    for stage_dir in _staging_dirs(Path(filename).stem).values():
-                        shutil.rmtree(stage_dir, ignore_errors=True)
+                    shutil.rmtree(mysql_stage_dir, ignore_errors=True)
         finally:
             pipeline.spark.stop()
-            backfill_audit_logs("/mnt/d/PredectiveIntelligenceSystem/flow/logs/audit_log.json",{"host": "localhost","user": "root","password": "root","database": "Telecom_Activity","port": 3306})
+            backfill_audit_logs("/mnt/d/PredectiveIntelligenceSystem/flow/logs/audit_log.json",{"host": "localhost","user": "root","password": "root","database": "Telecom_Activity1","port": 3306})
 
         return summary
 
     ingest_results = ingest()
     validate_results = validate(ingest_results)
-    process_summary = spark_process(validate_results)
+    spark_results = spark_process(validate_results)
+    process_summary = mysql_ingest(spark_results)
 
-    wait_for_files >> ingest_results >> validate_results >> process_summary
+    wait_for_files >> ingest_results >> validate_results >> spark_results >> process_summary
 
 
 telecom_landing_ingestion()

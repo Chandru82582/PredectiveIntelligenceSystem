@@ -7,7 +7,7 @@ import argparse
 from pathlib import Path
 from functools import reduce
 from datetime import datetime
-from typing import Dict, Tuple, Any, Optional
+from typing import Dict, Tuple, Any, Optional, List
 from dotenv import load_dotenv
 
 from pyspark.sql import SparkSession, DataFrame
@@ -16,6 +16,7 @@ from pyspark.sql.types import (
     StructField,
     StringType,
     DoubleType,
+    IntegerType,
 )
 from pyspark.sql import functions as F
 
@@ -55,6 +56,50 @@ class TelecomPipeline:
         StructField("internet", DoubleType(), True),
     ])
 
+    # Exact column layout (name + order) of each MySQL table, per
+    # 05_mysql_create_tables.sql. Used to align a Spark DataFrame to the
+    # target table before writing it (drops incidental columns such as
+    # input_file_name that don't exist in MySQL).
+    TABLE_COLUMNS = {
+        "curated_usage": [
+            "timestamp", "grid_id", "country_code", "sms_in_count", "sms_out_count",
+            "call_in_count", "call_out_count", "internet_usage", "date", "hour",
+            "day_of_week", "total_sms", "total_calls", "total_activity",
+        ],
+        "quarantine": [
+            "timestamp", "grid_id", "country_code", "sms_in_count", "sms_out_count",
+            "call_in_count", "call_out_count", "internet_usage", "date",
+            "quarantine_reason",
+        ],
+        "hourly_grid_summary": [
+            "date", "hour", "grid_id", "sms_in", "sms_out", "call_in", "call_out",
+            "internet_activity", "total_activity", "record_count",
+        ],
+        "daily_summary": [
+            "date", "total_sms", "total_calls", "internet_usage", "total_activity",
+            "active_grids", "total_records",
+        ],
+        "grid_summary": [
+            "date", "grid_id", "total_sms", "total_calls", "internet_usage",
+            "total_activity", "active_hours",
+        ],
+        "enriched_spatial_hourly": [
+            "date", "hour", "grid_id", "sms_in", "sms_out", "call_in", "call_out",
+            "internet_activity", "total_activity", "geometry",
+        ],
+    }
+
+    # Natural business key (matches each table's new composite PRIMARY KEY)
+    # used to upsert via INSERT ... ON DUPLICATE KEY UPDATE. Tables absent
+    # here (quarantine) have no safe natural key and are append-only.
+    TABLE_KEY_COLUMNS = {
+        "curated_usage": ["timestamp", "grid_id", "country_code"],
+        "hourly_grid_summary": ["date", "hour", "grid_id"],
+        "daily_summary": ["date"],
+        "grid_summary": ["date", "grid_id"],
+        "enriched_spatial_hourly": ["date", "hour", "grid_id"],
+    }
+
     def __init__(
         self,
         input_path: str = "./data/",
@@ -63,7 +108,7 @@ class TelecomPipeline:
         log_dir: str = "./logs",
         app_name: str = "TelecomDataPipeline",
     ):
-        load_dotenv()
+        load_dotenv(".env.spark")
 
         hadoop_home = os.getenv("HADOOP_HOME")
         if hadoop_home:
@@ -218,18 +263,28 @@ class TelecomPipeline:
         missing_grid = F.col("grid_id").isNull() | (F.trim(F.col("grid_id")) == "")
         missing_timestamp = F.col("timestamp").isNull()
 
+        # curated_usage.grid_id is INT in MySQL; a non-numeric CellID would
+        # silently become NULL on cast and violate that NOT NULL column, so
+        # route it to quarantine instead of letting it through as clean data.
+        invalid_grid_format = (
+            ~missing_grid & ~F.trim(F.col("grid_id")).rlike(r"^\d+$")
+        )
+
         negative_conditions = [
             (F.col(c).isNotNull() & (F.col(c) < 0))
             for c in self.ACTIVITY_COLUMNS
         ]
         negative_activity = reduce(lambda a, b: a | b, negative_conditions)
 
-        invalid_condition = missing_grid | missing_timestamp | negative_activity
+        invalid_condition = (
+            missing_grid | missing_timestamp | invalid_grid_format | negative_activity
+        )
 
         quarantine_df = df_with_date.filter(invalid_condition).withColumn(
             "quarantine_reason",
             F.when(missing_grid, F.lit("MISSING_GRID_ID"))
             .when(missing_timestamp, F.lit("MISSING_TIMESTAMP"))
+            .when(invalid_grid_format, F.lit("INVALID_GRID_ID"))
             .when(negative_activity, F.lit("NEGATIVE_ACTIVITY"))
             .otherwise(F.lit("DATA_ANOMALY"))
         )
@@ -251,6 +306,7 @@ class TelecomPipeline:
 
         clean_df = (
             valid_df
+            .withColumn("grid_id", F.trim(F.col("grid_id")).cast(IntegerType()))
             .withColumn("hour", F.hour("timestamp"))
             .withColumn("day_of_week", F.dayofweek("timestamp"))
             .withColumn("total_sms", F.col("sms_in_count") + F.col("sms_out_count"))
@@ -403,29 +459,151 @@ class TelecomPipeline:
 
         return row_counts
 
-    def write_to_mysql(self, df: DataFrame, table_name: str, host: str = "192.168.160.1"):
-        """
-        Pushes a DataFrame directly to MySQL using bulk batched JDBC execution.
-        Requires mysql-connector-j jar to be loaded in the Spark session.
-        """
-        self.logger.info("Writing %d rows to MySQL table: %s", df.count(), table_name)
-        
-        # We enforce rewriteBatchedStatements for massive performance gains in MySQL
-        jdbc_url = f"jdbc:mysql://{host}:3306/telecom_activity?rewriteBatchedStatements=true"
+    def _jdbc_config(self, host: Optional[str] = None) -> Tuple[str, Dict[str, str]]:
+        """Builds the JDBC URL and connection properties for the MySQL ingestion task."""
+        host = host or os.getenv("MYSQL_HOST", "192.168.160.1")
+        database = os.getenv("MYSQL_DATABASE", "telecom_activity")
+        user = os.getenv("MYSQL_USER", "root")
+        password = os.getenv("MYSQL_PASSWORD", "root")
+
+        # rewriteBatchedStatements is enforced for massive performance gains in MySQL
+        jdbc_url = f"jdbc:mysql://{host}:3306/{database}?rewriteBatchedStatements=true"
         properties = {
-            "user": "root",
-            "password": "root",
+            "user": user,
+            "password": password,
             "driver": "com.mysql.cj.jdbc.Driver",
             "batchsize": "10000",
-            "isolationLevel": "NONE"
+            "isolationLevel": "NONE",
         }
-        
-        df.write.jdbc(
-            url=jdbc_url, 
-            table=table_name, 
-            mode="append", 
-            properties=properties
+        return jdbc_url, properties
+
+    def append_to_mysql(self, df: DataFrame, table_name: str, host: Optional[str] = None) -> int:
+        """
+        Appends rows to a MySQL table via bulk batched JDBC execution.
+        Used for append-only log tables (quarantine, audit_log) that have no
+        safe natural key to upsert on. Requires mysql-connector-j to be
+        loaded in the Spark session (see create_spark_session).
+        """
+        if df.rdd.isEmpty():
+            self.logger.info("No rows to append into MySQL table: %s", table_name)
+            return 0
+
+        jdbc_url, properties = self._jdbc_config(host)
+        row_count = df.count()
+        self.logger.info("Appending %d rows to MySQL table: %s", row_count, table_name)
+
+        df.write.jdbc(url=jdbc_url, table=table_name, mode="append", properties=properties)
+        return row_count
+
+    def upsert_to_mysql(
+        self,
+        df: DataFrame,
+        table_name: str,
+        key_columns: List[str],
+        host: Optional[str] = None,
+    ) -> int:
+        """
+        Upserts a DataFrame into MySQL entirely through PySpark/JDBC:
+        1. Stage the rows into a throwaway `<table_name>_staging` table via
+           the standard JDBC DataFrame writer.
+        2. Merge the staging table into the target table with
+           INSERT ... ON DUPLICATE KEY UPDATE, relying on the target table's
+           composite PRIMARY KEY over `key_columns` (see
+           05_mysql_create_tables.sql) to detect existing rows.
+        3. Drop the staging table.
+
+        Steps 2-3 run over the same JVM JDBC connection Spark already holds
+        (via spark.jars), so no extra Python MySQL driver is required.
+        """
+        if df.rdd.isEmpty():
+            self.logger.info("No rows to upsert into MySQL table: %s", table_name)
+            return 0
+
+        jdbc_url, properties = self._jdbc_config(host)
+        staging_table = f"{table_name}_staging"
+        columns = df.columns
+        row_count = df.count()
+
+        self.logger.info(
+            "Staging %d rows for upsert into MySQL table: %s", row_count, table_name
         )
+        df.write.jdbc(
+            url=jdbc_url, table=staging_table, mode="overwrite", properties=properties
+        )
+
+        insert_cols = ", ".join(columns)
+        update_clause = ", ".join(
+            f"{c}=VALUES({c})" for c in columns if c not in key_columns
+        )
+        upsert_sql = (
+            f"INSERT INTO {table_name} ({insert_cols}) "
+            f"SELECT {insert_cols} FROM {staging_table} "
+            f"ON DUPLICATE KEY UPDATE {update_clause}"
+        )
+
+        jvm = self.spark._sc._jvm
+        conn = jvm.java.sql.DriverManager.getConnection(
+            jdbc_url, properties["user"], properties["password"]
+        )
+        try:
+            self.logger.info("Merging staged rows into MySQL table: %s", table_name)
+            stmt = conn.createStatement()
+            try:
+                stmt.executeUpdate(upsert_sql)
+            finally:
+                stmt.close()
+
+            stmt = conn.createStatement()
+            try:
+                stmt.executeUpdate(f"DROP TABLE IF EXISTS {staging_table}")
+            finally:
+                stmt.close()
+        finally:
+            conn.close()
+
+        return row_count
+
+    def ingest_to_mysql(
+        self, datasets: Dict[str, DataFrame], host: Optional[str] = None
+    ) -> Dict[str, int]:
+        """
+        Standalone MySQL ingestion task: aligns each dataset to its MySQL
+        table layout and pushes it via JDBC, upserting fact/summary tables
+        (curated_usage, hourly_grid_summary, daily_summary, grid_summary,
+        enriched_spatial_hourly) on their natural key, and appending
+        append-only tables (quarantine) that have no safe natural key.
+
+        Deliberately decoupled from `run()`'s local ETL/parquet stage so it
+        can be invoked as its own pipeline task (e.g. a separate Airflow
+        task) once clean/aggregate/enrich output is available.
+        """
+        self.logger.info("=" * 70)
+        self.logger.info("MYSQL INGESTION TASK STARTED")
+        self.logger.info("=" * 70)
+
+        row_counts: Dict[str, int] = {}
+        for table_name, df in datasets.items():
+            columns = self.TABLE_COLUMNS.get(table_name)
+            if columns is None:
+                self.logger.warning(
+                    "No MySQL column mapping for dataset '%s', skipping.", table_name
+                )
+                continue
+
+            aligned_df = df.select(*columns)
+            key_columns = self.TABLE_KEY_COLUMNS.get(table_name)
+
+            if key_columns:
+                row_counts[table_name] = self.upsert_to_mysql(
+                    aligned_df, table_name, key_columns, host=host
+                )
+            else:
+                row_counts[table_name] = self.append_to_mysql(
+                    aligned_df, table_name, host=host
+                )
+
+        self.logger.info("MySQL ingestion task finished. Row counts: %s", row_counts)
+        return row_counts
 
     def run(self) -> Dict[str, Any]:
         """Orchestrates pipeline execution for standalone CLI mode."""
@@ -479,13 +657,15 @@ class TelecomPipeline:
 
             # Local parquet writes
             output_rows_summary = self.write_outputs(datasets=datasets_to_write)
-            
-            # Database writes
-            for table_name, df_out in datasets_to_write.items():
-                 # Skip the spatial reference JSON translation table
-                 if table_name != "grid_reference":
-                     self.write_to_mysql(df_out, table_name)
-                     
+
+            # MySQL ingestion runs as its own decoupled task (upsert-aware),
+            # over the same in-memory datasets minus the spatial reference
+            # table (grid_reference has no matching MySQL table).
+            mysql_datasets = {
+                name: df for name, df in datasets_to_write.items() if name != "grid_reference"
+            }
+            self.ingest_to_mysql(mysql_datasets)
+
             status = "SUCCESS"
 
         except Exception as exc:

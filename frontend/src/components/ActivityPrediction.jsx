@@ -43,7 +43,7 @@ export default function ActivityPrediction({ prediction, loading }) {
             {isHigh ? 'High-Activity Risk — Next Hour' : 'Normal — Next Hour'}
           </div>
           <div className="text-[11px] text-slate-500">
-            LightGBM classifier · trained on {'>'}1.5x within-day baseline events · forecasting from{' '}
+            LightGBM classifier - v1 · trained on {'>'}1.5x within-day baseline events · forecasting from{' '}
             {new Date(prediction.feature_timestamp).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}
           </div>
         </div>

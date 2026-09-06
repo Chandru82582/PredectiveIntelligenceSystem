@@ -208,11 +208,23 @@ class MySQLDataIngestion:
                  day_of_week, total_sms, total_calls, total_activity)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''' if self.use_sqlite else '''
-                INSERT INTO curated_usage 
-                (timestamp, grid_id, country_code, sms_in_count, sms_out_count, 
-                 call_in_count, call_out_count, internet_usage, date, hour, 
+                INSERT INTO curated_usage
+                (timestamp, grid_id, country_code, sms_in_count, sms_out_count,
+                 call_in_count, call_out_count, internet_usage, date, hour,
                  day_of_week, total_sms, total_calls, total_activity)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    sms_in_count = VALUES(sms_in_count),
+                    sms_out_count = VALUES(sms_out_count),
+                    call_in_count = VALUES(call_in_count),
+                    call_out_count = VALUES(call_out_count),
+                    internet_usage = VALUES(internet_usage),
+                    date = VALUES(date),
+                    hour = VALUES(hour),
+                    day_of_week = VALUES(day_of_week),
+                    total_sms = VALUES(total_sms),
+                    total_calls = VALUES(total_calls),
+                    total_activity = VALUES(total_activity)
             '''
             
             values = [
@@ -301,6 +313,14 @@ class MySQLDataIngestion:
                 (date, hour, grid_id, sms_in, sms_out, call_in, call_out,
                  internet_activity, total_activity, record_count)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    sms_in = VALUES(sms_in),
+                    sms_out = VALUES(sms_out),
+                    call_in = VALUES(call_in),
+                    call_out = VALUES(call_out),
+                    internet_activity = VALUES(internet_activity),
+                    total_activity = VALUES(total_activity),
+                    record_count = VALUES(record_count)
             '''
             
             values = [
@@ -342,6 +362,13 @@ class MySQLDataIngestion:
                 (date, total_sms, total_calls, internet_usage, total_activity,
                  active_grids, total_records)
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    total_sms = VALUES(total_sms),
+                    total_calls = VALUES(total_calls),
+                    internet_usage = VALUES(internet_usage),
+                    total_activity = VALUES(total_activity),
+                    active_grids = VALUES(active_grids),
+                    total_records = VALUES(total_records)
             '''
             
             values = [
@@ -380,6 +407,12 @@ class MySQLDataIngestion:
                 (date, grid_id, total_sms, total_calls, internet_usage,
                  total_activity, active_hours)
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    total_sms = VALUES(total_sms),
+                    total_calls = VALUES(total_calls),
+                    internet_usage = VALUES(internet_usage),
+                    total_activity = VALUES(total_activity),
+                    active_hours = VALUES(active_hours)
             '''
             
             values = [
@@ -418,6 +451,14 @@ class MySQLDataIngestion:
                 (date, hour, grid_id, sms_in, sms_out, call_in, call_out,
                  internet_activity, total_activity, geometry)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    sms_in = VALUES(sms_in),
+                    sms_out = VALUES(sms_out),
+                    call_in = VALUES(call_in),
+                    call_out = VALUES(call_out),
+                    internet_activity = VALUES(internet_activity),
+                    total_activity = VALUES(total_activity),
+                    geometry = VALUES(geometry)
             '''
             
             values = [

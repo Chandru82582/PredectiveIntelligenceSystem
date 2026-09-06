@@ -19,6 +19,9 @@ flow/logs/audit_log.json
 flow/airflow_home/logs
 /backend-v1
 /noc-telemetry-dashboard
+.env
+.env.*  
+claude_bot
 
 
 # Logs
