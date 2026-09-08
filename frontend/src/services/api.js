@@ -620,6 +620,19 @@ export async function clearChatHistory(gridId) {
   }
 }
 
+export async function getPredictionMatrix() {
+  const key = 'predict:matrix';
+  return withCache(key, LIVE_TTL_MS, async () => {
+    try {
+      const data = await request('/predict/matrix');
+      return { ...data, meta: { fallback: false } };
+    } catch (err) {
+      console.warn('[api] getPredictionMatrix failed:', err.message);
+      throw err;
+    }
+  });
+}
+
 export default {
   getNetworkSummary,
   getGridTimeseries,
@@ -631,6 +644,7 @@ export default {
   getHotspots,
   getAlerts,
   getGridPrediction,
+  getPredictionMatrix,
   listGrids,
   getHourlyData,
   getSpatialData,

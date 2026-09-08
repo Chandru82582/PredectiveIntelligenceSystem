@@ -1,8 +1,9 @@
 import { useEffect, useState, useCallback } from 'react';
-import { Activity, Signal, Flame, Crosshair } from 'lucide-react';
+import { Activity, Signal, Flame, Crosshair, Grid as GridIcon, Map as MapIcon } from 'lucide-react';
 import * as api from '../services/api';
 import GeographicHeatmap from '../components/GeographicHeatmap';
-import PeakHourDial from '../components/PeakHourDial';
+import GridMatrix100 from '../components/GridMatrix100';
+// import PeakHourDial from '../components/PeakHourDial';
 import HotspotsLeaderboard from '../components/HotspotsLeaderboard';
 import AnomalyFeed from '../components/AnomalyFeed';
 
@@ -20,7 +21,7 @@ function KpiTile({ icon: Icon, label, value, accent }) {
   );
 }
 
-export default function NetworkOverview({ selectedGridId, onSelectGrid, isVisible }) {
+export default function NetworkOverview({ selectedGridId, onSelectGrid, onNavigate, isVisible }) {
   const [summary, setSummary] = useState(null);
   const [gridList, setGridList] = useState([]);
   const [geoByGrid, setGeoByGrid] = useState({});
@@ -29,6 +30,7 @@ export default function NetworkOverview({ selectedGridId, onSelectGrid, isVisibl
   const [hotspots, setHotspots] = useState([]);
   const [alerts, setAlerts] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [mapView, setMapView] = useState('matrix'); // 'matrix' | 'geographic'
 
   // A single Promise.all pass, and every request below now hits the
   // client-side cache (api.js) on repeat visits instead of re-querying the
@@ -90,6 +92,61 @@ export default function NetworkOverview({ selectedGridId, onSelectGrid, isVisibl
         <KpiTile icon={Crosshair} label="Top Grid" value={summary ? `#${summary.top_grid}` : '—'} accent="border-rose-500/30 text-rose-300" />
       </div>
 
+      {/* Spatial context & 100x100 Predictive Lattice */}
+      <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-3">
+          <div className="flex items-center gap-2">
+            <h2 className="text-sm font-semibold text-slate-100">
+              {mapView === 'matrix' ? 'Grid Matrix (10,000 Cells)' : 'Geographic Load Map (Leaflet)'}
+            </h2>
+            <span className="text-[11px] font-mono text-cyan-400 bg-cyan-950/60 border border-cyan-800/40 px-2 py-0.5 rounded">
+              Milan Lattice
+            </span>
+          </div>
+
+          <div className="flex items-center rounded-lg border border-slate-800 bg-slate-950 p-0.5">
+            <button
+              type="button"
+              onClick={() => setMapView('matrix')}
+              className={`flex items-center gap-1.5 rounded-md px-3 py-1 text-xs font-medium transition-all ${
+                mapView === 'matrix'
+                  ? 'bg-cyan-500/20 text-cyan-300 shadow-sm border border-cyan-500/30'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <GridIcon size={12} />
+              <span>Grid Matrix</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setMapView('geographic')}
+              className={`flex items-center gap-1.5 rounded-md px-3 py-1 text-xs font-medium transition-all ${
+                mapView === 'geographic'
+                  ? 'bg-cyan-500/20 text-cyan-300 shadow-sm border border-cyan-500/30'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <MapIcon size={12} />
+              <span>Geographic Map</span>
+            </button>
+          </div>
+        </div>
+
+        {mapView === 'matrix' ? (
+          <GridMatrix100
+            selectedGridId={selectedGridId}
+            onSelectGrid={onSelectGrid}
+            onNavigate={onNavigate}
+          />
+        ) : (
+          <GeographicHeatmap
+            cells={cells}
+            selectedGridId={selectedGridId}
+            onSelectGrid={onSelectGrid}
+            isVisible={isVisible && mapView === 'geographic'}
+          />
+        )}
+      </div>
       {/* Most actionable first: what needs attention right now, and where. */}
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
         <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
@@ -101,22 +158,6 @@ export default function NetworkOverview({ selectedGridId, onSelectGrid, isVisibl
           <HotspotsLeaderboard hotspots={hotspots} geoByGrid={geoByGrid} selectedGridId={selectedGridId} onSelectGrid={onSelectGrid} />
         </div>
       </div>
-
-      {/* Spatial context for whatever the feed/leaderboard just surfaced. */}
-      <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
-        <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-sm font-medium text-slate-200">Geographic Load Map</h2>
-          {loading && <span className="text-[10px] text-slate-500">syncing…</span>}
-        </div>
-        <GeographicHeatmap cells={cells} selectedGridId={selectedGridId} onSelectGrid={onSelectGrid} isVisible={isVisible} />
-      </div>
-
-      {/* Temporal / scheduling context — lower urgency, used for planning
-          maintenance windows rather than incident response. */}
-      {/* <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
-        <h2 className="mb-3 text-sm font-medium text-slate-200">Diurnal Peak Dynamics — Grid #{summary?.top_grid ?? '—'}</h2>
-        <PeakHourDial timeseries={dialTimeseries} weekly={weekly} />
-      </div> */}
     </div>
   );
 }

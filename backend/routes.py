@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, Query, Header, APIRouter
+from fastapi import FastAPI, Depends, HTTPException, Query, Header, APIRouter, Response
 from sqlalchemy.orm import sessionmaker, Session, declarative_base
 from auth import verify_api_key
 from datetime import datetime, date, timedelta, timezone
@@ -708,6 +708,23 @@ def predict_grid_activity(
     )
 
 
+MATRIX_CACHE_FILE = Path(__file__).resolve().parent / "grid_matrix_cache.json"
+
+@router.get("/predict/matrix")
+@router.get("/grid/matrix")
+def get_prediction_matrix(db: Session = Depends(get_db)):
+    """Returns the precomputed 100x100 predictive grid matrix with model predictions,
+    probabilities, and telemetry across all 10,000 grids."""
+    if MATRIX_CACHE_FILE.exists():
+        try:
+            with open(MATRIX_CACHE_FILE, "r", encoding="utf-8") as f:
+                content = f.read()
+            return Response(content=content, media_type="application/json")
+        except Exception as e:
+            print(f"Error reading grid_matrix_cache.json: {e}")
+    raise HTTPException(status_code=503, detail="Grid matrix cache is not ready.")
+
+
 # =====================================================================
 # DATA EXPLORER ENDPOINTS — filterable/paginated raw rows off each
 # backing table, for the "Data" page. One endpoint per table rather than
@@ -1089,19 +1106,21 @@ def chat_with_agent(request: ChatRequest, db: Session = Depends(get_db)):
         if request.grid_evidence:
             evidence_str = json.dumps(request.grid_evidence, indent=2)
 
-        # Get response from Claude
-        reply = agent.chat(
-            user_message=request.message,
-            chat_history=formatted_history,
-            context_evidence=evidence_str
-        )
-        
-        reply_ts = datetime.now(timezone.utc).isoformat()
-        
-        # Automatically persist into chat_history.json if grid_id is known
+        # Automatically resolve grid_id if known
         grid_id = request.grid_id
         if grid_id is None and request.grid_evidence and "grid_id" in request.grid_evidence:
             grid_id = request.grid_evidence["grid_id"]
+
+        # Get response from Claude with dynamic system prompt context
+        reply = agent.chat(
+            user_message=request.message,
+            chat_history=formatted_history,
+            context_evidence=evidence_str,
+            grid_id=grid_id,
+            grid_evidence=request.grid_evidence
+        )
+        
+        reply_ts = datetime.now(timezone.utc).isoformat()
 
         if grid_id is not None:
             try:

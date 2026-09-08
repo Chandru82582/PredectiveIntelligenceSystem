@@ -58,6 +58,16 @@ export default function App() {
     }
   }
 
+  function handleNavigate(gridId, targetTab) {
+    if (gridId != null) {
+      setSelectedGridId(gridId);
+      setGridSelectKey((k) => k + 1);
+    }
+    if (targetTab) {
+      setTab(targetTab);
+    }
+  }
+
   function handleSearchSubmit(e) {
     e.preventDefault();
     const clean = searchInput.replace(/^[#\s]+/, '').trim();
@@ -136,7 +146,12 @@ export default function App() {
 
       <main className={`mx-auto w-full max-w-[1400px] ${tab === 'assistant' ? 'flex-1 min-h-0 flex flex-col p-3 sm:p-4 overflow-hidden' : ''}`}>
         <div className={tab === 'overview' ? 'px-5 py-6' : 'hidden'}>
-          <NetworkOverview selectedGridId={selectedGridId} onSelectGrid={handleGridSelect} isVisible={tab === 'overview'} />
+          <NetworkOverview
+            selectedGridId={selectedGridId}
+            onSelectGrid={(id) => { setSelectedGridId(id); setGridSelectKey((k) => k + 1); }}
+            onNavigate={handleNavigate}
+            isVisible={tab === 'overview'}
+          />
         </div>
         <div className={tab === 'investigator' ? 'px-5 py-6' : 'hidden'}>
           <GridInvestigator gridId={selectedGridId} />
