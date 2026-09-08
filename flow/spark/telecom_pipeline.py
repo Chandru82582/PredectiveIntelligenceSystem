@@ -6,7 +6,7 @@ import logging
 import argparse
 from pathlib import Path
 from functools import reduce
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, Tuple, Any, Optional, List
 from dotenv import load_dotenv
 
@@ -87,6 +87,10 @@ class TelecomPipeline:
             "date", "hour", "grid_id", "sms_in", "sms_out", "call_in", "call_out",
             "internet_activity", "total_activity", "geometry",
         ],
+        "audit_log": [
+            "event_type", "status", "filename", "row_count", "error_message",
+            "duration_seconds", "processed_at",
+        ],
     }
 
     # Natural business key (matches each table's new composite PRIMARY KEY)
@@ -108,7 +112,9 @@ class TelecomPipeline:
         log_dir: str = "./logs",
         app_name: str = "TelecomDataPipeline",
     ):
-        load_dotenv(".env.spark")
+        module_dir = Path(__file__).resolve().parent
+        load_dotenv(dotenv_path=module_dir / ".env.spark")
+        load_dotenv(dotenv_path=module_dir.parent / ".env.airflow")
 
         hadoop_home = os.getenv("HADOOP_HOME")
         if hadoop_home:
@@ -461,7 +467,8 @@ class TelecomPipeline:
 
     def _jdbc_config(self, host: Optional[str] = None) -> Tuple[str, Dict[str, str]]:
         """Builds the JDBC URL and connection properties for the MySQL ingestion task."""
-        host = host or os.getenv("MYSQL_HOST", "192.168.160.1")
+        default_host = "192.168.160.1" if sys.platform == "linux" else "localhost"
+        host = host or os.getenv("MYSQL_HOST", default_host)
         database = os.getenv("MYSQL_DATABASE", "telecom_activity")
         user = os.getenv("MYSQL_USER", "root")
         password = os.getenv("MYSQL_PASSWORD", "root")
@@ -604,6 +611,109 @@ class TelecomPipeline:
 
         self.logger.info("MySQL ingestion task finished. Row counts: %s", row_counts)
         return row_counts
+
+    def ingest_audit_logs(
+        self,
+        log_file_path: Optional[str] = None,
+        host: Optional[str] = None,
+    ) -> int:
+        """
+        Reads audit_log.json using PySpark, filters out records already present
+        in the MySQL audit_log table via JDBC, and appends new audit records into
+        telecom_activity using PySpark JDBC.
+        """
+        if self.spark is None:
+            self.create_spark_session()
+
+        target_path = Path(log_file_path).resolve() if log_file_path else (self.log_dir / "audit_log.json")
+        if not target_path.exists() or target_path.stat().st_size == 0:
+            self.logger.warning("Audit log file does not exist or is empty: %s", target_path)
+            return 0
+
+        clean_path = str(target_path)
+        if sys.platform == "linux" and clean_path[:2].lower() == "d:":
+            clean_path = "/mnt/d/" + clean_path[2:].lstrip("\\/").replace("\\", "/")
+
+        from pyspark.sql.types import (
+            StructType,
+            StructField,
+            StringType,
+            LongType,
+            FloatType,
+        )
+
+        audit_schema = StructType([
+            StructField("event_type", StringType(), True),
+            StructField("status", StringType(), True),
+            StructField("filename", StringType(), True),
+            StructField("row_count", LongType(), True),
+            StructField("reason", StringType(), True),
+            StructField("error_message", StringType(), True),
+            StructField("duration_seconds", FloatType(), True),
+            StructField("processed_at", StringType(), True),
+        ])
+
+        raw_df = self.spark.read.schema(audit_schema).json(clean_path)
+        if raw_df.rdd.isEmpty():
+            self.logger.info("No audit entries in %s", clean_path)
+            return 0
+
+        audit_df = (
+            raw_df
+            .filter(F.col("processed_at").isNotNull())
+            .withColumn("event_type", F.coalesce(F.col("event_type"), F.lit("FILE_PROCESSING")))
+            .withColumn("status", F.coalesce(F.col("status"), F.lit("UNKNOWN")))
+            .withColumn("filename", F.coalesce(F.col("filename"), F.lit("UNKNOWN")))
+            .withColumn("row_count", F.coalesce(F.col("row_count"), F.lit(0)))
+            .withColumn("error_message", F.coalesce(F.col("reason"), F.col("error_message")))
+            .withColumn("duration_seconds", F.coalesce(F.col("duration_seconds"), F.lit(0.0)).cast(FloatType()))
+            .withColumn("processed_at", F.to_timestamp(F.col("processed_at")))
+            .withColumn("proc_sec", F.from_unixtime(F.round(F.unix_millis("processed_at") / 1000.0)))
+        )
+
+        jdbc_url, properties = self._jdbc_config(host)
+        try:
+            existing_audit = (
+                self.spark.read.jdbc(
+                    url=jdbc_url,
+                    table="audit_log",
+                    properties=properties
+                )
+                .select(
+                    F.col("filename").alias("exist_fn"),
+                    F.date_format("processed_at", "yyyy-MM-dd HH:mm:ss").alias("exist_sec")
+                )
+            )
+
+            new_audit_df = (
+                audit_df.join(
+                    existing_audit,
+                    (audit_df.filename == existing_audit.exist_fn) &
+                    (audit_df.proc_sec == existing_audit.exist_sec),
+                    how="left_anti"
+                )
+                .drop("proc_sec")
+                .select(
+                    "event_type", "status", "filename", "row_count",
+                    "error_message", "duration_seconds", "processed_at"
+                )
+            )
+        except Exception as e:
+            self.logger.warning("Could not query existing audit_log records from MySQL via JDBC: %s", e)
+            new_audit_df = audit_df.drop("proc_sec").select(
+                "event_type", "status", "filename", "row_count",
+                "error_message", "duration_seconds", "processed_at"
+            )
+
+        new_count = new_audit_df.count()
+        if new_count == 0:
+            self.logger.info("All audit records already exist in MySQL audit_log table.")
+            return 0
+
+        self.logger.info("Appending %d new audit record(s) into MySQL via PySpark JDBC.", new_count)
+        inserted_count = self.append_to_mysql(new_audit_df, table_name="audit_log", host=host)
+        self.logger.info("Successfully inserted %d audit records into MySQL audit_log table via PySpark.", inserted_count)
+        return inserted_count
 
     def run(self) -> Dict[str, Any]:
         """Orchestrates pipeline execution for standalone CLI mode."""

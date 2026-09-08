@@ -76,13 +76,11 @@ _AGG_DICT = {
 
 # Final feature order expected by the trained LightGBM model.
 FEATURE_COLUMNS = [
-    "grid_id",
     "activity_growth",
     "variability",
     "peak_ratio",
     "internet_share",
     "avg_activity_6h",
-    "active_hours",
     "current_to_baseline_ratio",
     "velocity_1h",
     "acceleration_1h",
@@ -226,9 +224,9 @@ class DataPreprocessor:
             df_agg["prior_baseline_24h"] + EPS
         )
 
-        df_agg["active_hours"] = grid_group["total_activity"].transform(
-            lambda s: (s > 0).rolling(6, min_periods=1).sum()
-        )
+        # df_agg["active_hours"] = grid_group["total_activity"].transform(
+        #     lambda s: (s > 0).rolling(6, min_periods=1).sum()
+        # )
 
         df_agg["peak_activity"] = grid_group["total_activity"].transform(
             lambda s: s.rolling(6, min_periods=1).max()
@@ -284,13 +282,14 @@ class DataPreprocessor:
         df_agg["dow_sin"] = np.sin(2 * np.pi * dow / 7.0)
         df_agg["dow_cos"] = np.cos(2 * np.pi * dow / 7.0)
 
-        # --- grid_id as categorical (consistent with training encoding) ---
-        if self.grid_id_categories is not None:
-            df_agg["grid_id"] = pd.Categorical(
-                df_agg["grid_id"], categories=self.grid_id_categories
-            )
-        else:
-            df_agg["grid_id"] = df_agg["grid_id"].astype("category")
+        # # --- grid_id as categorical (consistent with training encoding) ---
+        # if self.grid_id_categories is not None:
+        #     df_agg["grid_id"] = pd.Categorical(
+        #         df_agg["grid_id"], categories=self.grid_id_categories
+        #     )
+        # else:
+        #     df_agg["grid_id"] = df_agg["grid_id"].astype("category")
+        df_agg = df_agg.drop(columns = ["grid_id"])
 
         return df_agg
 

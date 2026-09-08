@@ -3,7 +3,7 @@ ml_model.py
 ===========
 
 Loads the trained LightGBM "next-hour high activity" classifier
-(DataAnalysis/models/lgbm_high_activity_v1.joblib) and exposes a single
+(DataAnalysis/models/lgbm_high_activity_v2.joblib) and exposes a single
 `get_predictor()` accessor used by the `/predict/*` routes.
 
 Reuses `DataAnalysis/preprocessor.py` (loaded directly from its file path,
@@ -35,7 +35,7 @@ import pandas as pd
 
 BACKEND_DIR = Path(__file__).resolve().parent
 DATA_ANALYSIS_DIR = BACKEND_DIR.parent / "DataAnalysis"
-MODEL_PATH = DATA_ANALYSIS_DIR / "models" / "lgbm_high_activity_v1.joblib"
+MODEL_PATH = DATA_ANALYSIS_DIR / "models" / "lgbm_high_activity_v2.joblib"
 
 
 def _load_preprocessor_module():
@@ -66,7 +66,7 @@ class HighActivityPredictor:
         self.model = bundle["model"]
         self.threshold = float(bundle["optimal_threshold"])
         self.feature_columns = list(bundle["features"])
-        self.grid_categories = list(bundle["grid_categories"])
+        # self.grid_categories = list(bundle["grid_categories"])
         self.metrics = bundle["metrics"]
         self.high_activity_multiplier = float(bundle["high_threshold"])
         self.preprocessor = DataPreprocessor()
@@ -87,9 +87,9 @@ class HighActivityPredictor:
             return features
 
         X = features[self.feature_columns].copy()
-        X["grid_id"] = pd.Categorical(
-            X["grid_id"].astype(int).astype(str), categories=self.grid_categories
-        )
+        # X["grid_id"] = pd.Categorical(
+        #     X["grid_id"].astype(int).astype(str), categories=self.grid_categories
+        # )
 
         proba = self.model.predict_proba(X)[:, 1]
         features = features.copy()

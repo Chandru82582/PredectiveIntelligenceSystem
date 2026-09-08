@@ -11,6 +11,7 @@ from typing import Any, Dict, List
 import pendulum
 from dotenv import load_dotenv
 from airflow.decorators import dag, task
+# pyrefly: ignore [missing-import]
 from airflow.sensors.python import PythonSensor
 
 # Setup logging
@@ -23,7 +24,6 @@ if str(PROJECT_ROOT) not in sys.path:
 
 # Import the PySpark pipeline
 from spark.telecom_pipeline import TelecomPipeline
-from sql_ingestion.insert_audit import backfill_audit_logs
 
 # --- Absolute path for dotenv ---
 env_path = PROJECT_ROOT / ".env.airflow"
@@ -32,7 +32,7 @@ load_dotenv(dotenv_path=env_path)
 FILE_GLOB_PATTERN = "sms-call-internet-mi-*.csv"
 
 def _get_path(env_var: str, default_val: str) -> Path:
-    """Translate a Windows path (D:\...) to its WSL equivalent (/mnt/d/...) when running on Linux."""
+    r"""Translate a Windows path (D:\...) to its WSL equivalent (/mnt/d/...) when running on Linux."""
     val = os.getenv(env_var, default_val)
     if sys.platform == "linux" and val[:2].lower() == "d:":
         val = "/mnt/d/" + val[2:].lstrip("\\/").replace("\\", "/")
@@ -367,8 +367,14 @@ def telecom_landing_ingestion():
                 finally:
                     shutil.rmtree(mysql_stage_dir, ignore_errors=True)
         finally:
-            pipeline.spark.stop()
-            backfill_audit_logs("/mnt/d/PredectiveIntelligenceSystem/flow/logs/audit_log.json",{"host": "localhost","user": "root","password": "root","database": "Telecom_Activity1","port": 3306})
+            try:
+                print("[mysql_ingest] Ingesting audit logs into MySQL via PySpark...")
+                inserted_count = pipeline.ingest_audit_logs(str(AUDIT_LOG_PATH))
+                print(f"[mysql_ingest] Successfully ingested {inserted_count} audit record(s) via PySpark.")
+            except Exception as exc:
+                print(f"[mysql_ingest] Error ingesting audit logs via PySpark: {exc}")
+            finally:
+                pipeline.spark.stop()
 
         return summary
 

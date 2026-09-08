@@ -20,7 +20,7 @@ function KpiTile({ icon: Icon, label, value, accent }) {
   );
 }
 
-export default function NetworkOverview({ selectedGridId, onSelectGrid }) {
+export default function NetworkOverview({ selectedGridId, onSelectGrid, isVisible }) {
   const [summary, setSummary] = useState(null);
   const [gridList, setGridList] = useState([]);
   const [geoByGrid, setGeoByGrid] = useState({});
@@ -43,7 +43,14 @@ export default function NetworkOverview({ selectedGridId, onSelectGrid }) {
       api.getAlerts({ limit: 12 }),
     ]);
     setSummary(summaryRes);
-    setGridList(gridsRes.grids || []);
+    const rawGrids = gridsRes.grids || [];
+    const uniqueGridsMap = new Map();
+    rawGrids.forEach((g) => {
+      if (g && g.grid_id != null && !uniqueGridsMap.has(g.grid_id)) {
+        uniqueGridsMap.set(g.grid_id, g);
+      }
+    });
+    setGridList(Array.from(uniqueGridsMap.values()));
     setHotspots(hotspotsRes.hotspots || []);
     setAlerts(alertsRes.alerts || []);
 
@@ -101,7 +108,7 @@ export default function NetworkOverview({ selectedGridId, onSelectGrid }) {
           <h2 className="text-sm font-medium text-slate-200">Geographic Load Map</h2>
           {loading && <span className="text-[10px] text-slate-500">syncing…</span>}
         </div>
-        <GeographicHeatmap cells={cells} selectedGridId={selectedGridId} onSelectGrid={onSelectGrid} />
+        <GeographicHeatmap cells={cells} selectedGridId={selectedGridId} onSelectGrid={onSelectGrid} isVisible={isVisible} />
       </div>
 
       {/* Temporal / scheduling context — lower urgency, used for planning

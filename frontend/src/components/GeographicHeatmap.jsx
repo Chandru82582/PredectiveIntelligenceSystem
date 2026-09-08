@@ -36,26 +36,88 @@ function gradientFor(tier) {
   return { 0.0: 'rgba(16,185,129,0)', 0.5: 'rgba(16,185,129,0.4)', 1.0: 'rgba(6,182,212,0.85)' };
 }
 
-function HeatLayer({ points, intensity, radius }) {
+function HeatLayer({ points, intensity, radius, isVisible }) {
   const map = useMap();
-  const layerRef = useRef(null);
+  const layerRef = useRef([]);
+  const [hasValidSize, setHasValidSize] = useState(() => {
+    try {
+      const s = map.getSize();
+      return !!(s && s.x > 0 && s.y > 0);
+    } catch {
+      return false;
+    }
+  });
 
   useEffect(() => {
-    if (!points.length) return undefined;
-    const high = points.filter((p) => p[2] > 0.75).map((p) => [p[0], p[1], p[2]]);
-    const medium = points.filter((p) => p[2] > 0.45 && p[2] <= 0.75).map((p) => [p[0], p[1], p[2]]);
-    const low = points.filter((p) => p[2] <= 0.45).map((p) => [p[0], p[1], p[2]]);
+    const checkSize = () => {
+      try {
+        const s = map.getSize();
+        setHasValidSize(!!(s && s.x > 0 && s.y > 0));
+      } catch {
+        setHasValidSize(false);
+      }
+    };
 
-    const layers = [
-      L.heatLayer(low, { radius, blur: radius * 0.6, maxZoom: 17, minOpacity: intensity * 0.3, gradient: gradientFor('low') }),
-      L.heatLayer(medium, { radius, blur: radius * 0.6, maxZoom: 17, minOpacity: intensity * 0.4, gradient: gradientFor('medium') }),
-      L.heatLayer(high, { radius, blur: radius * 0.6, maxZoom: 17, minOpacity: intensity * 0.5, gradient: gradientFor('high') }),
-    ];
-    layers.forEach((l) => l.addTo(map));
-    layerRef.current = layers;
+    checkSize();
+    map.on('resize', checkSize);
+    const t1 = setTimeout(checkSize, 60);
+    const t2 = setTimeout(checkSize, 300);
 
-    return () => layers.forEach((l) => map.removeLayer(l));
-  }, [map, points, intensity, radius]);
+    return () => {
+      map.off('resize', checkSize);
+      clearTimeout(t1);
+      clearTimeout(t2);
+    };
+  }, [map, isVisible]);
+
+  useEffect(() => {
+    // If not visible or map dimensions are 0 (e.g. background container), do not draw heat canvas
+    if (isVisible === false || !hasValidSize || !points.length) {
+      if (layerRef.current && layerRef.current.length) {
+        layerRef.current.forEach((l) => {
+          try {
+            map.removeLayer(l);
+          } catch {
+            // ignore
+          }
+        });
+        layerRef.current = [];
+      }
+      return undefined;
+    }
+
+    try {
+      const size = map.getSize();
+      if (!size || size.x <= 0 || size.y <= 0) return undefined;
+
+      const high = points.filter((p) => p[2] > 0.75).map((p) => [p[0], p[1], p[2]]);
+      const medium = points.filter((p) => p[2] > 0.45 && p[2] <= 0.75).map((p) => [p[0], p[1], p[2]]);
+      const low = points.filter((p) => p[2] <= 0.45).map((p) => [p[0], p[1], p[2]]);
+
+      const layers = [
+        L.heatLayer(low, { radius, blur: radius * 0.6, maxZoom: 17, minOpacity: intensity * 0.3, gradient: gradientFor('low') }),
+        L.heatLayer(medium, { radius, blur: radius * 0.6, maxZoom: 17, minOpacity: intensity * 0.4, gradient: gradientFor('medium') }),
+        L.heatLayer(high, { radius, blur: radius * 0.6, maxZoom: 17, minOpacity: intensity * 0.5, gradient: gradientFor('high') }),
+      ];
+
+      layers.forEach((l) => l.addTo(map));
+      layerRef.current = layers;
+
+      return () => {
+        layers.forEach((l) => {
+          try {
+            map.removeLayer(l);
+          } catch {
+            // ignore
+          }
+        });
+        layerRef.current = [];
+      };
+    } catch (err) {
+      console.warn('[GeographicHeatmap] HeatLayer deferred:', err);
+      return undefined;
+    }
+  }, [map, points, intensity, radius, isVisible, hasValidSize]);
 
   return null;
 }
@@ -114,18 +176,60 @@ function MapControls({ severityFilter, setSeverityFilter, intensity, setIntensit
   );
 }
 
-export default function GeographicHeatmap({ cells, selectedGridId, onSelectGrid }) {
+function MapInvalidator({ isVisible }) {
+  const map = useMap();
+
+  useEffect(() => {
+    if (isVisible !== false) {
+      const t1 = setTimeout(() => map.invalidateSize(), 50);
+      const t2 = setTimeout(() => map.invalidateSize(), 250);
+      return () => {
+        clearTimeout(t1);
+        clearTimeout(t2);
+      };
+    }
+  }, [map, isVisible]);
+
+  useEffect(() => {
+    const container = map.getContainer();
+    if (!container || typeof ResizeObserver === 'undefined') return;
+
+    const observer = new ResizeObserver(() => {
+      map.invalidateSize();
+    });
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [map]);
+
+  return null;
+}
+
+export default function GeographicHeatmap({ cells, selectedGridId, onSelectGrid, isVisible }) {
   const [intensity, setIntensity] = useState(0.65);
   const [radius, setRadius] = useState(28);
   const [severityFilter, setSeverityFilter] = useState('ALL');
 
   const enriched = useMemo(() => {
     if (!cells || cells.length === 0) return [];
-    const vals = cells.map((c) => c.total_activity).sort((a, b) => a - b);
+
+    // Deduplicate cells by grid_id in case gridList contains duplicates
+    const uniqueMap = new Map();
+    for (const c of cells) {
+      if (!c || c.grid_id == null) continue;
+      const existing = uniqueMap.get(c.grid_id);
+      if (!existing) {
+        uniqueMap.set(c.grid_id, c);
+      } else if ((c.polygon && !existing.polygon) || c.total_activity > existing.total_activity) {
+        uniqueMap.set(c.grid_id, { ...existing, ...c });
+      }
+    }
+
+    const uniqueCells = Array.from(uniqueMap.values());
+    const vals = uniqueCells.map((c) => c.total_activity).sort((a, b) => a - b);
     const p75 = vals[Math.floor(vals.length * 0.75)] ?? 0;
     const p45 = vals[Math.floor(vals.length * 0.45)] ?? 0;
     const max = vals[vals.length - 1] || 1;
-    return cells
+    return uniqueCells
       .filter((c) => c.polygon && c.polygon.length >= 3)
       .map((c) => ({ ...c, severity: classify(c.total_activity, p75, p45), norm: c.total_activity / max }));
   }, [cells]);
@@ -139,21 +243,22 @@ export default function GeographicHeatmap({ cells, selectedGridId, onSelectGrid 
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="relative h-[460px] w-full overflow-hidden rounded-lg border border-slate-800">
+      <div className="relative h-[680px] w-full overflow-hidden rounded-lg border border-slate-800">
         <MapContainer center={MILAN_CENTER} zoom={12} className="h-full w-full bg-slate-950" zoomControl={false} preferCanvas>
+          <MapInvalidator isVisible={isVisible} />
           <TileLayer
             attribution='&copy; <a href="https://carto.com/attributions">CARTO</a> &copy; OpenStreetMap contributors'
             url={MAP_TILE_URL}
             subdomains={['a', 'b', 'c', 'd']}
           />
 
-          <HeatLayer points={heatPoints} intensity={intensity} radius={radius} />
+          <HeatLayer points={heatPoints} intensity={intensity} radius={radius} isVisible={isVisible} />
 
           {visibleCells.map((c) => {
             const isSelected = c.grid_id === selectedGridId;
             return (
               <Polygon
-                key={c.grid_id}
+                key={`grid-polygon-${c.grid_id}`}
                 positions={c.polygon}
                 pathOptions={{
                   color: isSelected ? '#f8fafc' : SEVERITY_COLOR[c.severity],

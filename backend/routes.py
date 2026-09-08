@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Depends, HTTPException, Query, Header, APIRouter
 from sqlalchemy.orm import sessionmaker, Session, declarative_base
 from auth import verify_api_key
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 from typing import List, Optional
 from sqlalchemy import  Column, Integer, Float, Date, DateTime, String, Index, func
 from database import HourlyGridSummary, EnrichedSpatialHourly, GridSummary, DailySummary, get_db
@@ -25,6 +25,14 @@ import math
 import json
 import re
 import time
+from ml_model import get_predictor
+import math
+import json
+import re
+import time
+
+from claude_agent import ClaudeNOCAgent
+from schemas import ChatRequest, ChatResponse, SaveChatHistoryRequest, ChatHistoryResponse, ChatMessage
 
 router = APIRouter(dependencies=[Depends(verify_api_key)])
 
@@ -196,9 +204,9 @@ def get_network_summary(as_of: Optional[datetime] = None, db: Session = Depends(
     records = db.query(HourlyGridSummary).filter(
         HourlyGridSummary.date == d, HourlyGridSummary.hour == h
     ).all()
-    
+
     total_act = sum(r.total_activity for r in records)
-    active_grids = len([r for r in records if r.total_activity > 0])
+    active_grids = len({r.grid_id for r in records if r.total_activity > 0})
     
     # Peak hour across the current day
     day_records = db.query(
@@ -594,9 +602,18 @@ def list_grids(
 
     rows = db.query(HourlyGridSummary).filter(
         HourlyGridSummary.date == d, HourlyGridSummary.hour == h
-    ).order_by(HourlyGridSummary.total_activity.desc()).limit(limit).all()
+    ).order_by(HourlyGridSummary.total_activity.desc()).limit(limit * 2).all()
 
-    vals = sorted(r.total_activity for r in rows)
+    seen_gids = set()
+    unique_rows = []
+    for r in rows:
+        if r.grid_id not in seen_gids:
+            seen_gids.add(r.grid_id)
+            unique_rows.append(r)
+            if len(unique_rows) >= limit:
+                break
+
+    vals = sorted(r.total_activity for r in unique_rows)
 
     def severity_for(v: float) -> str:
         if not vals:
@@ -609,7 +626,7 @@ def list_grids(
             return "MEDIUM"
         return "NORMAL"
 
-    grids = [GridListItem(grid_id=r.grid_id, total_activity=r.total_activity, severity=severity_for(r.total_activity)) for r in rows]
+    grids = [GridListItem(grid_id=r.grid_id, total_activity=r.total_activity, severity=severity_for(r.total_activity)) for r in unique_rows]
     return GridListResponse(as_of=effective_time, total=len(grids), grids=grids)
 
 
@@ -951,8 +968,8 @@ def _audit_sort_value(row: dict, key: str):
     value = row.get(key)
     if value is not None:
         return value
-    # Missing duration_seconds/reason (some REJECTED entries lack them) needs
-    # a same-typed fallback so every row is comparable during sort.
+    if key == "id":
+        return 0
     if key == "duration_seconds":
         return -1.0
     if key == "row_count":
@@ -960,7 +977,7 @@ def _audit_sort_value(row: dict, key: str):
     return ""
 
 
-_AUDIT_LOG_SORT_COLUMNS = {"processed_at", "filename", "status", "row_count", "duration_seconds"}
+_AUDIT_LOG_SORT_COLUMNS = {"id", "processed_at", "filename", "status", "row_count", "duration_seconds", "reason"}
 
 
 @router.get("/data/audit-log", response_model=AuditLogResponse)
@@ -1008,10 +1025,162 @@ def get_audit_log_data(
 
     records = [
         AuditLogEntry(
-            id=r["id"], filename=r.get("filename", ""), status=r.get("status", ""),
-            row_count=r.get("row_count", 0), reason=r.get("reason"),
-            processed_at=r.get("processed_at"), duration_seconds=r.get("duration_seconds"),
+            id=r["id"],
+            filename=r.get("filename") or "",
+            status=r.get("status") or "",
+            row_count=r.get("row_count") or 0,
+            reason=r.get("reason") or r.get("error_message"),
+            duration_seconds=r.get("duration_seconds"),
+            processed_at=r.get("processed_at"),
         )
         for r in page_rows
     ]
+
     return AuditLogResponse(total=total, page=page, page_size=page_size, records=records)
+
+
+
+CHAT_HISTORY_FILE = Path(__file__).resolve().parent / "chat_history.json"
+
+
+def _load_all_chat_histories() -> dict:
+    if not CHAT_HISTORY_FILE.exists():
+        return {}
+    try:
+        with open(CHAT_HISTORY_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return data if isinstance(data, dict) else {}
+    except Exception as e:
+        print(f"Warning: Failed to load chat history from {CHAT_HISTORY_FILE}: {e}")
+        return {}
+
+
+def _save_all_chat_histories(data: dict) -> None:
+    try:
+        temp_file = CHAT_HISTORY_FILE.with_suffix(".tmp")
+        with open(temp_file, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        temp_file.replace(CHAT_HISTORY_FILE)
+    except Exception as e:
+        print(f"Warning: Failed to save chat history to {CHAT_HISTORY_FILE}: {e}")
+
+
+# ---------------------------------------------------------------------------
+# NOC Assistant AI Endpoint & JSON File Persistence
+# ---------------------------------------------------------------------------
+@router.post("/chat", response_model=ChatResponse)
+def chat_with_agent(request: ChatRequest, db: Session = Depends(get_db)):
+    """
+    Passes a user query and NOC evidence context to the Claude AI agent.
+    The agent can trigger database tools automatically before responding.
+    Automatically persists the conversation into chat_history.json.
+    """
+    try:
+        agent = ClaudeNOCAgent(db=db)
+        
+        # Convert Pydantic chat history to the format Anthropic expects
+        formatted_history = []
+        if request.chat_history:
+            for msg in request.chat_history:
+                formatted_history.append({"role": msg.role, "content": msg.content})
+        
+        # Format evidence as a JSON string if provided
+        evidence_str = ""
+        if request.grid_evidence:
+            evidence_str = json.dumps(request.grid_evidence, indent=2)
+
+        # Get response from Claude
+        reply = agent.chat(
+            user_message=request.message,
+            chat_history=formatted_history,
+            context_evidence=evidence_str
+        )
+        
+        reply_ts = datetime.now(timezone.utc).isoformat()
+        
+        # Automatically persist into chat_history.json if grid_id is known
+        grid_id = request.grid_id
+        if grid_id is None and request.grid_evidence and "grid_id" in request.grid_evidence:
+            grid_id = request.grid_evidence["grid_id"]
+
+        if grid_id is not None:
+            try:
+                histories = _load_all_chat_histories()
+                grid_key = str(grid_id)
+                grid_msgs = list(histories.get(grid_key, []))
+                
+                # If grid_msgs is empty and client provided previous chat_history, initialize with it
+                if not grid_msgs and request.chat_history:
+                    grid_msgs = [
+                        {"role": m.role, "content": m.content, "timestamp": m.timestamp}
+                        for m in request.chat_history
+                    ]
+                
+                grid_msgs.append({
+                    "role": "user",
+                    "content": request.message,
+                    "timestamp": reply_ts
+                })
+                grid_msgs.append({
+                    "role": "assistant",
+                    "content": reply,
+                    "timestamp": reply_ts
+                })
+                histories[grid_key] = grid_msgs
+                _save_all_chat_histories(histories)
+            except Exception as hist_err:
+                print(f"Warning: Failed to auto-persist chat history: {hist_err}")
+
+        return ChatResponse(
+            reply=reply,
+            timestamp=reply_ts
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/chat/history", response_model=ChatHistoryResponse)
+def get_chat_history(grid_id: Optional[int] = Query(None)):
+    """
+    Load chat history from the backend chat_history.json file.
+    If grid_id is specified, returns messages for that grid cell.
+    If grid_id is omitted, returns all stored grid chats.
+    """
+    histories = _load_all_chat_histories()
+    if grid_id is not None:
+        grid_key = str(grid_id)
+        raw_msgs = histories.get(grid_key, [])
+        return ChatHistoryResponse(grid_id=grid_id, messages=raw_msgs)
+    return ChatHistoryResponse(histories=histories)
+
+
+@router.post("/chat/history")
+def save_chat_history(payload: SaveChatHistoryRequest):
+    """
+    Save or update chat messages for a specific grid in chat_history.json.
+    """
+    histories = _load_all_chat_histories()
+    grid_key = str(payload.grid_id)
+    histories[grid_key] = [
+        {"role": msg.role, "content": msg.content, "timestamp": msg.timestamp}
+        for msg in payload.messages
+    ]
+    _save_all_chat_histories(histories)
+    return {"status": "success", "grid_id": payload.grid_id, "count": len(payload.messages)}
+
+
+@router.delete("/chat/history")
+def clear_chat_history(grid_id: Optional[int] = Query(None)):
+    """
+    Clear chat history for a specific grid or clear all from chat_history.json.
+    """
+    histories = _load_all_chat_histories()
+    if grid_id is not None:
+        grid_key = str(grid_id)
+        if grid_key in histories:
+            del histories[grid_key]
+            _save_all_chat_histories(histories)
+        return {"status": "cleared", "grid_id": grid_id}
+    else:
+        _save_all_chat_histories({})
+        return {"status": "all_cleared"}

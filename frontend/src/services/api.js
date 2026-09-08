@@ -570,6 +570,56 @@ export async function getAuditLogData(filters = {}) {
   });
 }
 
+
+
+export async function getChatHistory(gridId) {
+  try {
+    const params = gridId !== undefined && gridId !== null ? { grid_id: gridId } : {};
+    return await request('/chat/history', params);
+  } catch (err) {
+    console.warn('[api] getChatHistory fallback:', err.message);
+    return null;
+  }
+}
+
+export async function saveChatHistory(gridId, messages) {
+  try {
+    const url = new URL('/chat/history', BASE_URL);
+    const headers = { 'Content-Type': 'application/json' };
+    if (API_KEY) headers['X-API-Key'] = API_KEY;
+    const res = await fetch(url.toString(), {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ grid_id: Number(gridId), messages })
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  } catch (err) {
+    console.warn('[api] saveChatHistory failed:', err.message);
+    return null;
+  }
+}
+
+export async function clearChatHistory(gridId) {
+  try {
+    const url = new URL('/chat/history', BASE_URL);
+    if (gridId !== undefined && gridId !== null) {
+      url.searchParams.set('grid_id', gridId);
+    }
+    const headers = {};
+    if (API_KEY) headers['X-API-Key'] = API_KEY;
+    const res = await fetch(url.toString(), {
+      method: 'DELETE',
+      headers
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  } catch (err) {
+    console.warn('[api] clearChatHistory failed:', err.message);
+    return null;
+  }
+}
+
 export default {
   getNetworkSummary,
   getGridTimeseries,
@@ -587,5 +637,9 @@ export default {
   getGridSummaryData,
   getDailySummaryData,
   getAuditLogData,
+  getChatHistory,
+  saveChatHistory,
+  clearChatHistory,
   QUICK_SWITCH_GRIDS,
 };
+

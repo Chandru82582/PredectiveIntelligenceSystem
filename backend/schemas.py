@@ -200,7 +200,7 @@ class AuditLogEntry(BaseModel):
     status: str  # "ACCEPTED" or "REJECTED"
     row_count: int
     reason: Optional[str] = None
-    processed_at: datetime
+    processed_at: Optional[datetime] = None
     duration_seconds: Optional[float] = None  # absent on some REJECTED entries (failed before completion)
 
 class AuditLogResponse(BaseModel):
@@ -208,3 +208,31 @@ class AuditLogResponse(BaseModel):
     page: int
     page_size: int
     records: List[AuditLogEntry]
+
+
+
+#claude endpoints
+
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+    timestamp: Optional[str] = None
+
+class ChatRequest(BaseModel):
+    grid_id: Optional[int] = None
+    message: str
+    chat_history: Optional[List[ChatMessage]] = []
+    grid_evidence: Optional[Dict] = None
+
+class ChatResponse(BaseModel):
+    reply: str
+    timestamp: Optional[str] = None
+
+class SaveChatHistoryRequest(BaseModel):
+    grid_id: int
+    messages: List[ChatMessage]
+
+class ChatHistoryResponse(BaseModel):
+    grid_id: Optional[int] = None
+    messages: Optional[List[ChatMessage]] = None
+    histories: Optional[Dict[str, List[ChatMessage]]] = None

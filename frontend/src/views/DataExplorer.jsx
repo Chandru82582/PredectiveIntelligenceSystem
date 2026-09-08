@@ -52,29 +52,6 @@ const TABLES = {
       { key: 'loaded_at', label: 'Loaded At', format: fmtDateTime, sortable: false },
     ],
   },
-  spatial: {
-    label: 'Enriched Spatial Hourly',
-    table: 'enriched_spatial_hourly',
-    note: 'Activity + geometry provenance. Parsed lat/lon lives behind /network/grid/{id}/geography.',
-    fetch: api.getSpatialData,
-    defaultSort: 'date',
-    hasHour: true,
-    hasGeometryFilter: true,
-    columns: [
-      { key: 'id', label: 'ID', align: 'right' },
-      { key: 'date', label: 'Date' },
-      { key: 'hour', label: 'Hour', format: (v) => `${String(v).padStart(2, '0')}:00` },
-      { key: 'grid_id', label: 'Grid' },
-      { key: 'sms_in', label: 'SMS In', align: 'right', format: fmtNum },
-      { key: 'sms_out', label: 'SMS Out', align: 'right', format: fmtNum },
-      { key: 'call_in', label: 'Call In', align: 'right', format: fmtNum },
-      { key: 'call_out', label: 'Call Out', align: 'right', format: fmtNum },
-      { key: 'internet_activity', label: 'Internet', align: 'right', format: fmtNum },
-      { key: 'total_activity', label: 'Total Activity', align: 'right', format: fmtNum },
-      { key: 'has_geometry', label: 'Geometry', format: (v) => (v ? 'yes' : 'computed'), sortable: false },
-      { key: 'loaded_at', label: 'Loaded At', format: fmtDateTime, sortable: false },
-    ],
-  },
   grid_summary: {
     label: 'Grid Daily Rollup',
     table: 'grid_summary',
@@ -167,7 +144,7 @@ function defaultFilters(def) {
   };
 }
 
-export default function DataExplorer({ onSelectGrid }) {
+export default function DataExplorer({ onSelectGrid, selectedGridId, gridSelectKey }) {
   const [activeKey, setActiveKey] = useState('hourly');
   const [filtersByTable, setFiltersByTable] = useState(() =>
     Object.fromEntries(Object.entries(TABLES).map(([key, t]) => [key, defaultFilters(t)]))
@@ -176,6 +153,20 @@ export default function DataExplorer({ onSelectGrid }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [usingFallback, setUsingFallback] = useState(false);
+
+  useEffect(() => {
+    if (gridSelectKey > 0 && selectedGridId) {
+      setFiltersByTable((prev) => {
+        const next = { ...prev };
+        Object.keys(TABLES).forEach((key) => {
+          if (TABLES[key].hasGridFilter !== false) {
+            next[key] = { ...next[key], grid_id: String(selectedGridId), page: 1 };
+          }
+        });
+        return next;
+      });
+    }
+  }, [gridSelectKey, selectedGridId]);
 
   const def = TABLES[activeKey];
   const filters = filtersByTable[activeKey];
