@@ -277,32 +277,34 @@ export default function DataExplorer({ onSelectGrid, selectedGridId, gridSelectK
 
   return (
     <div className="flex flex-col gap-5">
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-900/40 px-4 py-3">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white/80 px-4 py-3 shadow-sm backdrop-blur transition-colors duration-150 dark:border-slate-800 dark:bg-slate-900/40">
         <div className="flex items-center gap-3">
-          <span className="flex h-9 w-9 items-center justify-center rounded-md border border-cyan-500/30 text-cyan-300">
+          <span className="flex h-9 w-9 items-center justify-center rounded-md border border-cyan-500/30 bg-cyan-500/10 text-cyan-600 dark:text-cyan-300">
             <Database size={16} />
           </span>
           <div>
-            <div className="text-sm font-medium text-slate-100">Data Explorer</div>
-            <div className="text-[11px] text-slate-500">{def.note}</div>
+            <div className="text-sm font-medium text-slate-900 dark:text-slate-100">Data Explorer</div>
+            <div className="text-[11px] text-slate-500 dark:text-slate-400">{def.note}</div>
           </div>
         </div>
 
-        <div className="flex items-center gap-2 text-[10px] text-slate-500">
-          {usingFallback && <span className="rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-amber-300">synthetic fallback data</span>}
-          <button onClick={load} className="flex items-center gap-1 rounded border border-slate-800 bg-slate-800/60 px-2 py-1 text-slate-300 hover:text-cyan-300">
+        <div className="flex items-center gap-2 text-[10px] text-slate-500 dark:text-slate-400">
+          {usingFallback && <span className="rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-amber-700 dark:text-amber-300">synthetic fallback data</span>}
+          <button onClick={load} className="flex items-center gap-1 rounded border border-slate-200 bg-slate-100 px-2 py-1 text-slate-700 hover:text-cyan-700 dark:border-slate-800 dark:bg-slate-800/60 dark:text-slate-300 dark:hover:text-cyan-300">
             <RefreshCw size={11} className={loading ? 'animate-spin' : ''} /> Refresh
           </button>
         </div>
       </div>
 
-      <div className="flex flex-wrap rounded-full border border-slate-800 bg-slate-900/70 p-0.5 w-fit">
+      <div className="flex flex-wrap rounded-full border border-slate-200 bg-slate-100/80 p-0.5 w-fit dark:border-slate-800 dark:bg-slate-900/70">
         {Object.entries(TABLES).map(([key, t]) => (
           <button
             key={key}
             onClick={() => setActiveKey(key)}
             className={`rounded-full px-3.5 py-1.5 text-[12px] font-medium transition-colors ${
-              activeKey === key ? 'bg-cyan-500/20 text-cyan-300' : 'text-slate-500 hover:text-slate-300'
+              activeKey === key
+                ? 'bg-white text-cyan-700 shadow-sm border border-slate-200/80 dark:border-transparent dark:bg-cyan-500/20 dark:text-cyan-300'
+                : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'
             }`}
           >
             {t.label}
@@ -310,41 +312,41 @@ export default function DataExplorer({ onSelectGrid, selectedGridId, gridSelectK
         ))}
       </div>
 
-      <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+      <div className="rounded-xl border border-slate-200 bg-white/80 p-4 shadow-sm backdrop-blur transition-colors duration-150 dark:border-slate-800 dark:bg-slate-900/40">
         <div className="mb-3 flex flex-wrap items-end gap-3">
           {def.hasGridFilter !== false && (
             <label className="flex flex-col gap-1">
-              <span className="text-[10px] uppercase tracking-wide text-slate-500">Grid ID</span>
+              <span className="text-[10px] uppercase tracking-wide text-slate-500 dark:text-slate-400">Grid ID</span>
               <input
                 type="number"
                 value={filters.grid_id}
                 onChange={(e) => setFilters({ grid_id: e.target.value })}
                 placeholder="any"
-                className="w-24 rounded border border-slate-800 bg-slate-900/70 px-2 py-1 font-mono text-[11px] text-slate-200 focus:outline-none focus:border-cyan-500/50"
+                className="w-24 rounded border border-slate-200 bg-slate-50 px-2 py-1 font-mono text-[11px] text-slate-800 focus:outline-none focus:border-cyan-500/50 dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-200"
               />
             </label>
           )}
 
           {def.hasFilenameFilter && (
             <label className="flex flex-col gap-1">
-              <span className="text-[10px] uppercase tracking-wide text-slate-500">Filename</span>
+              <span className="text-[10px] uppercase tracking-wide text-slate-500 dark:text-slate-400">Filename</span>
               <input
                 type="text"
                 value={filters.filename}
                 onChange={(e) => setFilters({ filename: e.target.value })}
                 placeholder="contains…"
-                className="w-40 rounded border border-slate-800 bg-slate-900/70 px-2 py-1 font-mono text-[11px] text-slate-200 focus:outline-none focus:border-cyan-500/50"
+                className="w-40 rounded border border-slate-200 bg-slate-50 px-2 py-1 font-mono text-[11px] text-slate-800 focus:outline-none focus:border-cyan-500/50 dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-200"
               />
             </label>
           )}
 
           {def.hasStatusFilter && (
             <label className="flex flex-col gap-1">
-              <span className="text-[10px] uppercase tracking-wide text-slate-500">Status</span>
+              <span className="text-[10px] uppercase tracking-wide text-slate-500 dark:text-slate-400">Status</span>
               <select
                 value={filters.status}
                 onChange={(e) => setFilters({ status: e.target.value })}
-                className="rounded border border-slate-800 bg-slate-900/70 px-2 py-1 font-mono text-[11px] text-slate-200 focus:outline-none"
+                className="rounded border border-slate-200 bg-slate-50 px-2 py-1 font-mono text-[11px] text-slate-800 focus:outline-none dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-200"
               >
                 <option value="">any</option>
                 <option value="ACCEPTED">accepted</option>
@@ -354,28 +356,28 @@ export default function DataExplorer({ onSelectGrid, selectedGridId, gridSelectK
           )}
 
           <label className="flex flex-col gap-1">
-            <span className="text-[10px] uppercase tracking-wide text-slate-500">Date From</span>
+            <span className="text-[10px] uppercase tracking-wide text-slate-500 dark:text-slate-400">Date From</span>
             <input
               type="date"
               value={filters.date_from}
               onChange={(e) => setFilters({ date_from: e.target.value })}
-              className="rounded border border-slate-800 bg-slate-900/70 px-2 py-1 font-mono text-[11px] text-slate-200 focus:outline-none [color-scheme:dark]"
+              className="rounded border border-slate-200 bg-slate-50 px-2 py-1 font-mono text-[11px] text-slate-800 focus:outline-none dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-200"
             />
           </label>
           <label className="flex flex-col gap-1">
-            <span className="text-[10px] uppercase tracking-wide text-slate-500">Date To</span>
+            <span className="text-[10px] uppercase tracking-wide text-slate-500 dark:text-slate-400">Date To</span>
             <input
               type="date"
               value={filters.date_to}
               onChange={(e) => setFilters({ date_to: e.target.value })}
-              className="rounded border border-slate-800 bg-slate-900/70 px-2 py-1 font-mono text-[11px] text-slate-200 focus:outline-none [color-scheme:dark]"
+              className="rounded border border-slate-200 bg-slate-50 px-2 py-1 font-mono text-[11px] text-slate-800 focus:outline-none dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-200"
             />
           </label>
 
           {def.hasHour && (
             <>
               <label className="flex flex-col gap-1">
-                <span className="text-[10px] uppercase tracking-wide text-slate-500">Hour ≥</span>
+                <span className="text-[10px] uppercase tracking-wide text-slate-500 dark:text-slate-400">Hour ≥</span>
                 <input
                   type="number"
                   min={0}
@@ -383,11 +385,11 @@ export default function DataExplorer({ onSelectGrid, selectedGridId, gridSelectK
                   value={filters.hour_min}
                   onChange={(e) => setFilters({ hour_min: e.target.value })}
                   placeholder="0"
-                  className="w-16 rounded border border-slate-800 bg-slate-900/70 px-2 py-1 font-mono text-[11px] text-slate-200 focus:outline-none focus:border-cyan-500/50"
+                  className="w-16 rounded border border-slate-200 bg-slate-50 px-2 py-1 font-mono text-[11px] text-slate-800 focus:outline-none focus:border-cyan-500/50 dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-200"
                 />
               </label>
               <label className="flex flex-col gap-1">
-                <span className="text-[10px] uppercase tracking-wide text-slate-500">Hour ≤</span>
+                <span className="text-[10px] uppercase tracking-wide text-slate-500 dark:text-slate-400">Hour ≤</span>
                 <input
                   type="number"
                   min={0}
@@ -395,7 +397,7 @@ export default function DataExplorer({ onSelectGrid, selectedGridId, gridSelectK
                   value={filters.hour_max}
                   onChange={(e) => setFilters({ hour_max: e.target.value })}
                   placeholder="23"
-                  className="w-16 rounded border border-slate-800 bg-slate-900/70 px-2 py-1 font-mono text-[11px] text-slate-200 focus:outline-none focus:border-cyan-500/50"
+                  className="w-16 rounded border border-slate-200 bg-slate-50 px-2 py-1 font-mono text-[11px] text-slate-800 focus:outline-none focus:border-cyan-500/50 dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-200"
                 />
               </label>
             </>
@@ -404,23 +406,23 @@ export default function DataExplorer({ onSelectGrid, selectedGridId, gridSelectK
           {def.hasActivityFilter !== false && (
             <>
               <label className="flex flex-col gap-1">
-                <span className="text-[10px] uppercase tracking-wide text-slate-500">Activity ≥</span>
+                <span className="text-[10px] uppercase tracking-wide text-slate-500 dark:text-slate-400">Activity ≥</span>
                 <input
                   type="number"
                   value={filters.min_activity}
                   onChange={(e) => setFilters({ min_activity: e.target.value })}
                   placeholder="any"
-                  className="w-24 rounded border border-slate-800 bg-slate-900/70 px-2 py-1 font-mono text-[11px] text-slate-200 focus:outline-none focus:border-cyan-500/50"
+                  className="w-24 rounded border border-slate-200 bg-slate-50 px-2 py-1 font-mono text-[11px] text-slate-800 focus:outline-none focus:border-cyan-500/50 dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-200"
                 />
               </label>
               <label className="flex flex-col gap-1">
-                <span className="text-[10px] uppercase tracking-wide text-slate-500">Activity ≤</span>
+                <span className="text-[10px] uppercase tracking-wide text-slate-500 dark:text-slate-400">Activity ≤</span>
                 <input
                   type="number"
                   value={filters.max_activity}
                   onChange={(e) => setFilters({ max_activity: e.target.value })}
                   placeholder="any"
-                  className="w-24 rounded border border-slate-800 bg-slate-900/70 px-2 py-1 font-mono text-[11px] text-slate-200 focus:outline-none focus:border-cyan-500/50"
+                  className="w-24 rounded border border-slate-200 bg-slate-50 px-2 py-1 font-mono text-[11px] text-slate-800 focus:outline-none focus:border-cyan-500/50 dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-200"
                 />
               </label>
             </>
@@ -428,11 +430,11 @@ export default function DataExplorer({ onSelectGrid, selectedGridId, gridSelectK
 
           {def.hasGeometryFilter && (
             <label className="flex flex-col gap-1">
-              <span className="text-[10px] uppercase tracking-wide text-slate-500">Geometry</span>
+              <span className="text-[10px] uppercase tracking-wide text-slate-500 dark:text-slate-400">Geometry</span>
               <select
                 value={filters.has_geometry}
                 onChange={(e) => setFilters({ has_geometry: e.target.value })}
-                className="rounded border border-slate-800 bg-slate-900/70 px-2 py-1 font-mono text-[11px] text-slate-200 focus:outline-none"
+                className="rounded border border-slate-200 bg-slate-50 px-2 py-1 font-mono text-[11px] text-slate-800 focus:outline-none dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-200"
               >
                 <option value="">any</option>
                 <option value="true">real</option>
@@ -442,11 +444,11 @@ export default function DataExplorer({ onSelectGrid, selectedGridId, gridSelectK
           )}
 
           <label className="flex flex-col gap-1">
-            <span className="text-[10px] uppercase tracking-wide text-slate-500">Page size</span>
+            <span className="text-[10px] uppercase tracking-wide text-slate-500 dark:text-slate-400">Page size</span>
             <select
               value={filters.page_size}
               onChange={(e) => setFilters({ page_size: Number(e.target.value), page: 1 })}
-              className="rounded border border-slate-800 bg-slate-900/70 px-2 py-1 font-mono text-[11px] text-slate-200 focus:outline-none"
+              className="rounded border border-slate-200 bg-slate-50 px-2 py-1 font-mono text-[11px] text-slate-800 focus:outline-none dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-200"
             >
               {[25, 50, 100, 250, 500].map((n) => (
                 <option key={n} value={n}>
@@ -459,7 +461,7 @@ export default function DataExplorer({ onSelectGrid, selectedGridId, gridSelectK
           {hasActiveFilters && (
             <button
               onClick={clearFilters}
-              className="flex items-center gap-1 rounded border border-slate-800 bg-slate-800/60 px-2 py-1.5 text-[11px] text-slate-300 hover:text-rose-300"
+              className="flex items-center gap-1 rounded border border-slate-200 bg-slate-100 px-2 py-1.5 text-[11px] text-slate-700 hover:text-rose-600 dark:border-slate-800 dark:bg-slate-800/60 dark:text-slate-300 dark:hover:text-rose-300"
             >
               <X size={11} /> Clear filters
             </button>
@@ -477,7 +479,7 @@ export default function DataExplorer({ onSelectGrid, selectedGridId, gridSelectK
           loading={loading}
         />
 
-        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500">
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500 dark:text-slate-400">
           <span>
             {(result.total || 0).toLocaleString()} row{result.total === 1 ? '' : 's'} · page {filters.page} of {totalPages}
           </span>
@@ -485,14 +487,14 @@ export default function DataExplorer({ onSelectGrid, selectedGridId, gridSelectK
             <button
               disabled={filters.page <= 1}
               onClick={() => setFilters({ page: filters.page - 1 })}
-              className="flex items-center gap-1 rounded border border-slate-800 bg-slate-800/60 px-2 py-1 text-slate-300 hover:text-cyan-300 disabled:cursor-not-allowed disabled:opacity-40"
+              className="flex items-center gap-1 rounded border border-slate-200 bg-slate-100 px-2 py-1 text-slate-700 hover:text-cyan-700 disabled:cursor-not-allowed disabled:opacity-40 dark:border-slate-800 dark:bg-slate-800/60 dark:text-slate-300 dark:hover:text-cyan-300"
             >
               <ChevronLeft size={12} /> Prev
             </button>
             <button
               disabled={filters.page >= totalPages}
               onClick={() => setFilters({ page: filters.page + 1 })}
-              className="flex items-center gap-1 rounded border border-slate-800 bg-slate-800/60 px-2 py-1 text-slate-300 hover:text-cyan-300 disabled:cursor-not-allowed disabled:opacity-40"
+              className="flex items-center gap-1 rounded border border-slate-200 bg-slate-100 px-2 py-1 text-slate-700 hover:text-cyan-700 disabled:cursor-not-allowed disabled:opacity-40 dark:border-slate-800 dark:bg-slate-800/60 dark:text-slate-300 dark:hover:text-cyan-300"
             >
               Next <ChevronRight size={12} />
             </button>

@@ -346,13 +346,34 @@ export async function getAlerts({ limit = 50, severity, asOf } = {}) {
   });
 }
 
-// NEW: next-hour high-activity risk prediction (LightGBM model served by
-// backend/ml_model.py), powers the Grid Investigator's Prediction panel.
-export async function getGridPrediction(gridId, asOf) {
-  const key = `predict:${gridId}:${asOf || 'latest'}`;
+// Available ML models catalog from /ml/models
+export async function getAvailableModels() {
+  const key = 'predict:models';
+  return withCache(key, LIVE_TTL_MS, async () => {
+    try {
+      const data = await request('/predict/models');
+      return { ...data, meta: { fallback: false } };
+    } catch (err) {
+      console.warn('[api] getAvailableModels fallback:', err.message);
+      return {
+        models: ['lgbm_high_activity_v2.joblib', 'lgbm_high_activity_v1.joblib'],
+        default: 'lgbm_high_activity_v2.joblib',
+        meta: { fallback: true },
+      };
+    }
+  });
+}
+
+// Next-hour high-activity risk prediction (LightGBM model served by ml/predict.py),
+// supports choosing any model from /ml/models via modelName.
+export async function getGridPrediction(gridId, asOf, modelName) {
+  const key = `predict:${gridId}:${asOf || 'latest'}:${modelName || 'default'}`;
   return withCache(key, asOf ? null : LIVE_TTL_MS, async () => {
     try {
-      const data = await request(`/predict/grid/${gridId}`, { as_of: asOf });
+      const params = {};
+      if (asOf) params.as_of = asOf;
+      if (modelName) params.model_name = modelName;
+      const data = await request(`/predict/grid/${gridId}`, params);
       return { ...data, meta: { fallback: false } };
     } catch (err) {
       console.warn('[api] getGridPrediction fallback:', err.message);
@@ -367,6 +388,7 @@ export async function getGridPrediction(gridId, asOf) {
         prediction: probability >= threshold ? 1 : 0,
         risk_label: probability >= threshold ? 'HIGH_ACTIVITY_RISK' : 'NORMAL',
         threshold,
+        model_name: modelName || 'lgbm_high_activity_v2.joblib',
         data_points_used: 48,
         features: {
           activity_growth: 0.9 + (rand() - 0.5) * 0.6,
@@ -633,6 +655,33 @@ export async function getPredictionMatrix() {
   });
 }
 
+export async function getPipelineStatus() {
+  return request('/pipeline/status');
+}
+
+export async function getNetworkHealthGrainCheck(date) {
+  const params = date ? { date } : {};
+  return request('/pipeline/network-health', params);
+}
+
+export async function runApiTestSuite() {
+  try {
+    const url = new URL('/pipeline/test-api', BASE_URL);
+    const headers = {};
+    if (API_KEY) headers['X-API-Key'] = API_KEY;
+    const res = await fetch(url.toString(), { method: 'POST', headers });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  } catch (err) {
+    console.warn('[api] runApiTestSuite failed:', err.message);
+    throw err;
+  }
+}
+
+export async function reviewGridAnomaly(gridId) {
+  return request(`/network/grid/${gridId}/review-anomaly`);
+}
+
 export default {
   getNetworkSummary,
   getGridTimeseries,
@@ -643,6 +692,7 @@ export default {
   getWeeklyPeak,
   getHotspots,
   getAlerts,
+  getAvailableModels,
   getGridPrediction,
   getPredictionMatrix,
   listGrids,
@@ -654,6 +704,11 @@ export default {
   getChatHistory,
   saveChatHistory,
   clearChatHistory,
+  getPipelineStatus,
+  getNetworkHealthGrainCheck,
+  runApiTestSuite,
+  reviewGridAnomaly,
   QUICK_SWITCH_GRIDS,
 };
+
 

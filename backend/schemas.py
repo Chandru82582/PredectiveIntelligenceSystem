@@ -112,6 +112,7 @@ class PredictionResponse(BaseModel):
     prediction: int  # 1 = high-activity risk, 0 = normal (probability thresholded at `threshold`)
     risk_label: str  # "HIGH_ACTIVITY_RISK" or "NORMAL"
     threshold: float  # decision threshold used (model's F1-optimal threshold)
+    model_name: Optional[str] = None  # name of the model artifact used
     data_points_used: int  # trailing hourly rows available for this grid in the lookback window
     features: Dict[str, float]  # the engineered feature values fed to the model
 
@@ -217,6 +218,8 @@ class ChatMessage(BaseModel):
     role: str
     content: str
     timestamp: Optional[str] = None
+    skill_used: Optional[str] = None
+    skills_used: Optional[List[str]] = None
 
 class ChatRequest(BaseModel):
     grid_id: Optional[int] = None
@@ -227,6 +230,8 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     reply: str
     timestamp: Optional[str] = None
+    skill_used: Optional[str] = None
+    skills_used: Optional[List[str]] = None
 
 class SaveChatHistoryRequest(BaseModel):
     grid_id: int

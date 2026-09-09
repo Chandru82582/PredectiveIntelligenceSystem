@@ -4,17 +4,26 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import 'leaflet.heat';
 import { ZoomIn, ZoomOut, Locate, Flame } from 'lucide-react';
+import { useTheme } from '../context/ThemeContext';
 
 const MILAN_CENTER = [45.4642, 9.19];
 
-const MAP_TILE_URL =
+const MAP_TILE_URL_DARK =
   import.meta.env.VITE_MAP_TILE_URL || 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
+const MAP_TILE_URL_LIGHT = 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png';
 
-const SEVERITY_COLOR = {
+const SEVERITY_COLOR_DARK = {
   HIGH: '#f43f5e',
   MEDIUM: '#f59e0b',
   NORMAL: '#06b6d4',
   DEADZONE: '#1e293b',
+};
+
+const SEVERITY_COLOR_LIGHT = {
+  HIGH: '#e11d48',
+  MEDIUM: '#d97706',
+  NORMAL: '#0284c7',
+  DEADZONE: '#cbd5e1',
 };
 
 function classify(activity, p75, p45) {
@@ -133,8 +142,8 @@ function MapControls({ severityFilter, setSeverityFilter, intensity, setIntensit
             onClick={() => setSeverityFilter(s)}
             className={`rounded px-2.5 py-1 text-[11px] font-medium tracking-wide shadow transition-colors ${
               severityFilter === s
-                ? 'bg-cyan-500/30 text-cyan-200 border border-cyan-500/50'
-                : 'bg-slate-900/80 text-slate-400 border border-slate-800 hover:text-slate-200'
+                ? 'bg-cyan-500/20 text-cyan-800 border border-cyan-500/40 dark:bg-cyan-500/30 dark:text-cyan-200 dark:border-cyan-500/50'
+                : 'bg-white/90 text-slate-700 border border-slate-200 hover:text-slate-900 dark:bg-slate-900/80 dark:text-slate-400 dark:border-slate-800 dark:hover:text-slate-200'
             }`}
           >
             {s}
@@ -142,32 +151,32 @@ function MapControls({ severityFilter, setSeverityFilter, intensity, setIntensit
         ))}
       </div>
       <div className="pointer-events-auto absolute right-3 top-3 z-[500] flex items-center gap-1.5">
-        <button onClick={() => map.zoomIn()} className="rounded border border-slate-800 bg-slate-900/80 p-1.5 text-slate-300 shadow hover:text-cyan-300">
+        <button onClick={() => map.zoomIn()} className="rounded border border-slate-200 bg-white/90 p-1.5 text-slate-700 shadow hover:text-cyan-600 dark:border-slate-800 dark:bg-slate-900/80 dark:text-slate-300 dark:hover:text-cyan-300">
           <ZoomIn size={14} />
         </button>
-        <button onClick={() => map.zoomOut()} className="rounded border border-slate-800 bg-slate-900/80 p-1.5 text-slate-300 shadow hover:text-cyan-300">
+        <button onClick={() => map.zoomOut()} className="rounded border border-slate-200 bg-white/90 p-1.5 text-slate-700 shadow hover:text-cyan-600 dark:border-slate-800 dark:bg-slate-900/80 dark:text-slate-300 dark:hover:text-cyan-300">
           <ZoomOut size={14} />
         </button>
-        <button onClick={() => map.setView(MILAN_CENTER, 12)} className="rounded border border-slate-800 bg-slate-900/80 p-1.5 text-slate-300 shadow hover:text-cyan-300">
+        <button onClick={() => map.setView(MILAN_CENTER, 12)} className="rounded border border-slate-200 bg-white/90 p-1.5 text-slate-700 shadow hover:text-cyan-600 dark:border-slate-800 dark:bg-slate-900/80 dark:text-slate-300 dark:hover:text-cyan-300">
           <Locate size={14} />
         </button>
       </div>
-      <div className="pointer-events-auto absolute bottom-3 left-3 z-[500] flex items-center gap-2 rounded border border-slate-800 bg-slate-900/80 px-2 py-1 text-[10px] text-slate-400 shadow">
-        <Flame size={11} className="text-rose-400" />
+      <div className="pointer-events-auto absolute bottom-3 left-3 z-[500] flex items-center gap-2 rounded border border-slate-200 bg-white/90 px-2 py-1 text-[10px] text-slate-700 shadow dark:border-slate-800 dark:bg-slate-900/80 dark:text-slate-400">
+        <Flame size={11} className="text-rose-500 dark:text-rose-400" />
         EPSG:4326 · Milan Metro
       </div>
-      <div className="pointer-events-auto absolute bottom-3 right-3 z-[500] flex w-64 flex-col gap-2 rounded border border-slate-800 bg-slate-900/85 px-3 py-2 shadow">
+      <div className="pointer-events-auto absolute bottom-3 right-3 z-[500] flex w-64 flex-col gap-2 rounded border border-slate-200 bg-white/95 px-3 py-2 shadow-lg dark:border-slate-800 dark:bg-slate-900/85">
         <div>
-          <div className="mb-1 flex justify-between text-[10px] text-slate-400">
+          <div className="mb-1 flex justify-between text-[10px] text-slate-600 dark:text-slate-400">
             <span>Heatmap Intensity</span>
-            <span className="font-mono text-slate-300">{intensity.toFixed(2)}</span>
+            <span className="font-mono text-slate-800 dark:text-slate-300">{intensity.toFixed(2)}</span>
           </div>
           <input type="range" min={0.2} max={1} step={0.05} value={intensity} onChange={(e) => setIntensity(parseFloat(e.target.value))} className="w-full accent-cyan-500" />
         </div>
         <div>
-          <div className="mb-1 flex justify-between text-[10px] text-slate-400">
+          <div className="mb-1 flex justify-between text-[10px] text-slate-600 dark:text-slate-400">
             <span>Thermal Radius</span>
-            <span className="font-mono text-slate-300">{radius}px</span>
+            <span className="font-mono text-slate-800 dark:text-slate-300">{radius}px</span>
           </div>
           <input type="range" min={24} max={80} step={2} value={radius} onChange={(e) => setRadius(parseFloat(e.target.value))} className="w-full accent-amber-500" />
         </div>
@@ -205,9 +214,13 @@ function MapInvalidator({ isVisible }) {
 }
 
 export default function GeographicHeatmap({ cells, selectedGridId, onSelectGrid, isVisible }) {
+  const { isDark } = useTheme();
   const [intensity, setIntensity] = useState(0.65);
   const [radius, setRadius] = useState(28);
   const [severityFilter, setSeverityFilter] = useState('ALL');
+
+  const severityColors = isDark ? SEVERITY_COLOR_DARK : SEVERITY_COLOR_LIGHT;
+  const tileUrl = isDark ? MAP_TILE_URL_DARK : MAP_TILE_URL_LIGHT;
 
   const enriched = useMemo(() => {
     if (!cells || cells.length === 0) return [];
@@ -243,12 +256,13 @@ export default function GeographicHeatmap({ cells, selectedGridId, onSelectGrid,
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="relative h-[680px] w-full overflow-hidden rounded-lg border border-slate-800">
-        <MapContainer center={MILAN_CENTER} zoom={12} className="h-full w-full bg-slate-950" zoomControl={false} preferCanvas>
+      <div className="relative h-[680px] w-full overflow-hidden rounded-lg border border-slate-200 dark:border-slate-800">
+        <MapContainer center={MILAN_CENTER} zoom={12} className="h-full w-full bg-slate-100 dark:bg-slate-950" zoomControl={false} preferCanvas>
           <MapInvalidator isVisible={isVisible} />
           <TileLayer
+            key={tileUrl}
             attribution='&copy; <a href="https://carto.com/attributions">CARTO</a> &copy; OpenStreetMap contributors'
-            url={MAP_TILE_URL}
+            url={tileUrl}
             subdomains={['a', 'b', 'c', 'd']}
           />
 
@@ -261,21 +275,21 @@ export default function GeographicHeatmap({ cells, selectedGridId, onSelectGrid,
                 key={`grid-polygon-${c.grid_id}`}
                 positions={c.polygon}
                 pathOptions={{
-                  color: isSelected ? '#f8fafc' : SEVERITY_COLOR[c.severity],
-                  weight: isSelected ? 2 : 1,
-                  fillColor: SEVERITY_COLOR[c.severity],
+                  color: isSelected ? (isDark ? '#f8fafc' : '#0f172a') : severityColors[c.severity],
+                  weight: isSelected ? 2.5 : 1,
+                  fillColor: severityColors[c.severity],
                   fillOpacity: isSelected ? 0.75 : 0.45,
                 }}
                 eventHandlers={{ click: () => onSelectGrid?.(c.grid_id) }}
               >
                 <Tooltip direction="top" sticky>
-                  <div className="font-mono text-[11px]">
-                    <div className="text-cyan-700">GRID #{c.grid_id}</div>
-                    <div className="text-slate-600">
+                  <div className="font-mono text-[11px] p-0.5">
+                    <div className="font-bold text-cyan-700 dark:text-cyan-400">GRID #{c.grid_id}</div>
+                    <div className="text-slate-600 dark:text-slate-300">
                       {c.latitude.toFixed(4)}°N, {c.longitude.toFixed(4)}°E
                     </div>
-                    <div className="text-slate-600">{c.sector_label}</div>
-                    <div className="text-amber-700">{c.total_activity.toFixed(1)} ops/hr</div>
+                    <div className="text-slate-600 dark:text-slate-300">{c.sector_label}</div>
+                    <div className="font-semibold text-amber-700 dark:text-amber-400">{c.total_activity.toFixed(1)} ops/hr</div>
                   </div>
                 </Tooltip>
               </Polygon>

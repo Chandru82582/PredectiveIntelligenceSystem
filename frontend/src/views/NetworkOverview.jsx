@@ -9,13 +9,13 @@ import AnomalyFeed from '../components/AnomalyFeed';
 
 function KpiTile({ icon: Icon, label, value, accent }) {
   return (
-    <div className="flex items-center gap-3 rounded-lg border border-slate-800 bg-slate-900/50 px-4 py-3">
+    <div className="flex items-center gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm transition-colors duration-150 dark:border-slate-800 dark:bg-slate-900/50">
       <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-md border ${accent}`}>
         <Icon size={16} />
       </span>
       <div className="min-w-0">
-        <div className="text-[10px] uppercase tracking-wide text-slate-500">{label}</div>
-        <div className="truncate font-mono text-lg text-slate-100">{value}</div>
+        <div className="text-[10px] uppercase tracking-wide text-slate-500 dark:text-slate-400">{label}</div>
+        <div className="truncate font-mono text-lg text-slate-900 dark:text-slate-100">{value}</div>
       </div>
     </div>
   );
@@ -93,25 +93,25 @@ export default function NetworkOverview({ selectedGridId, onSelectGrid, onNaviga
       </div>
 
       {/* Spatial context & 100x100 Predictive Lattice */}
-      <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-3">
+      <div className="rounded-xl border border-slate-200 bg-white/80 p-4 shadow-sm backdrop-blur dark:border-slate-800 dark:bg-slate-900/40">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3 dark:border-slate-800">
           <div className="flex items-center gap-2">
-            <h2 className="text-sm font-semibold text-slate-100">
+            <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
               {mapView === 'matrix' ? 'Grid Matrix (10,000 Cells)' : 'Geographic Load Map (Leaflet)'}
             </h2>
-            <span className="text-[11px] font-mono text-cyan-400 bg-cyan-950/60 border border-cyan-800/40 px-2 py-0.5 rounded">
+            <span className="text-[11px] font-mono text-cyan-700 bg-cyan-50 border border-cyan-200 px-2 py-0.5 rounded dark:text-cyan-400 dark:bg-cyan-950/60 dark:border-cyan-800/40">
               Milan Lattice
             </span>
           </div>
 
-          <div className="flex items-center rounded-lg border border-slate-800 bg-slate-950 p-0.5">
+          <div className="flex items-center rounded-lg border border-slate-200 bg-slate-100 p-0.5 dark:border-slate-800 dark:bg-slate-950">
             <button
               type="button"
               onClick={() => setMapView('matrix')}
               className={`flex items-center gap-1.5 rounded-md px-3 py-1 text-xs font-medium transition-all ${
                 mapView === 'matrix'
-                  ? 'bg-cyan-500/20 text-cyan-300 shadow-sm border border-cyan-500/30'
-                  : 'text-slate-400 hover:text-slate-200'
+                  ? 'bg-white text-cyan-700 shadow-sm border border-slate-200/80 dark:border-cyan-500/30 dark:bg-cyan-500/20 dark:text-cyan-300'
+                  : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'
               }`}
             >
               <GridIcon size={12} />
@@ -122,8 +122,8 @@ export default function NetworkOverview({ selectedGridId, onSelectGrid, onNaviga
               onClick={() => setMapView('geographic')}
               className={`flex items-center gap-1.5 rounded-md px-3 py-1 text-xs font-medium transition-all ${
                 mapView === 'geographic'
-                  ? 'bg-cyan-500/20 text-cyan-300 shadow-sm border border-cyan-500/30'
-                  : 'text-slate-400 hover:text-slate-200'
+                  ? 'bg-white text-cyan-700 shadow-sm border border-slate-200/80 dark:border-cyan-500/30 dark:bg-cyan-500/20 dark:text-cyan-300'
+                  : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'
               }`}
             >
               <MapIcon size={12} />
@@ -149,12 +149,12 @@ export default function NetworkOverview({ selectedGridId, onSelectGrid, onNaviga
       </div>
       {/* Most actionable first: what needs attention right now, and where. */}
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
-        <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
-          <h2 className="mb-3 text-sm font-medium text-slate-200">Algorithmic Anomaly Feed</h2>
+        <div className="rounded-xl border border-slate-200 bg-white/80 p-4 shadow-sm backdrop-blur dark:border-slate-800 dark:bg-slate-900/40">
+          <h2 className="mb-3 text-sm font-medium text-slate-900 dark:text-slate-200">Algorithmic Anomaly Feed</h2>
           <AnomalyFeed alerts={alerts} onSelectGrid={onSelectGrid} />
         </div>
-        <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
-          <h2 className="mb-3 text-sm font-medium text-slate-200">Hotspots Leaderboard</h2>
+        <div className="rounded-xl border border-slate-200 bg-white/80 p-4 shadow-sm backdrop-blur dark:border-slate-800 dark:bg-slate-900/40">
+          <h2 className="mb-3 text-sm font-medium text-slate-900 dark:text-slate-200">Hotspots Leaderboard</h2>
           <HotspotsLeaderboard hotspots={hotspots} geoByGrid={geoByGrid} selectedGridId={selectedGridId} onSelectGrid={onSelectGrid} />
         </div>
       </div>

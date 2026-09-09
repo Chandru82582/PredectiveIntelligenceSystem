@@ -17,24 +17,28 @@ from schemas import (
     DailySummaryRecord, DailySummaryRecordsResponse,
     AuditLogEntry, AuditLogResponse,
 )
+import sys
 from pathlib import Path
+
+ROOT_DIR = Path(__file__).resolve().parent.parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
 import pandas as pd
 from rules import AlertAnalyzer
-from ml_model import get_predictor
+from ml import get_predictor, list_available_models, DEFAULT_MODEL_NAME
 import math
 import json
 import re
 import time
-from ml_model import get_predictor
-import math
-import json
-import re
-import time
+import threading
+import uuid
 
-from claude_agent import ClaudeNOCAgent
+from agent import ClaudeNOCAgent, execute_tool
 from schemas import ChatRequest, ChatResponse, SaveChatHistoryRequest, ChatHistoryResponse, ChatMessage
 
 router = APIRouter(dependencies=[Depends(verify_api_key)])
+
 
 # ---------------------------------------------------------------------------
 # Lightweight in-process TTL cache
@@ -288,7 +292,7 @@ def get_grid_timeseries(
 @router.get("/network/hotspots", response_model=HotspotResponse)
 def get_hotspots(
     limit: int = 10,
-    severity: str = Query("HIGH", regex="^(HIGH|MEDIUM|LOW)$"),
+    severity: str = Query("HIGH", pattern="^(HIGH|MEDIUM|LOW)$"),
     as_of: Optional[datetime] = None,
     db: Session = Depends(get_db)
 ):
@@ -643,10 +647,21 @@ def list_grids(
 _PREDICTION_LOOKBACK_HOURS = 95
 
 
+@router.get("/predict/models")
+def get_available_models():
+    """Returns all trained LightGBM models available in /ml/models directory."""
+    models = list_available_models()
+    return {
+        "models": models,
+        "default": DEFAULT_MODEL_NAME if DEFAULT_MODEL_NAME in models else (models[0] if models else "")
+    }
+
+
 @router.get("/predict/grid/{grid_id}", response_model=PredictionResponse)
 def predict_grid_activity(
     grid_id: int,
     as_of: Optional[datetime] = None,
+    model_name: Optional[str] = Query(None, description="Optional model filename from /ml/models"),
     db: Session = Depends(get_db),
 ):
     """Predicts whether `grid_id` is likely to enter a high-activity state
@@ -684,8 +699,10 @@ def predict_grid_activity(
         "total_activity": df["total_activity"],
     })
 
-    predictor = get_predictor()
+    model_name_str = model_name if isinstance(model_name, str) and model_name.strip() else None
+    predictor = get_predictor(model_name=model_name_str)
     result = predictor.predict_latest(raw_df)
+
     if result is None:
         raise HTTPException(
             status_code=422,
@@ -703,6 +720,7 @@ def predict_grid_activity(
         prediction=int(result["prediction"]),
         risk_label=result["risk_label"],
         threshold=predictor.threshold,
+        model_name=predictor.model_name,
         data_points_used=len(df),
         features={col: float(result[col]) for col in predictor.feature_columns if col != "grid_id"},
     )
@@ -1058,28 +1076,55 @@ def get_audit_log_data(
 
 
 CHAT_HISTORY_FILE = Path(__file__).resolve().parent / "chat_history.json"
+_chat_history_lock = threading.Lock()
 
 
 def _load_all_chat_histories() -> dict:
     if not CHAT_HISTORY_FILE.exists():
         return {}
-    try:
-        with open(CHAT_HISTORY_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            return data if isinstance(data, dict) else {}
-    except Exception as e:
-        print(f"Warning: Failed to load chat history from {CHAT_HISTORY_FILE}: {e}")
-        return {}
+    with _chat_history_lock:
+        for attempt in range(3):
+            try:
+                with open(CHAT_HISTORY_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    return data if isinstance(data, dict) else {}
+            except (PermissionError, OSError) as pe:
+                if attempt < 2:
+                    time.sleep(0.05 * (attempt + 1))
+                    continue
+                print(f"Warning: Failed to load chat history from {CHAT_HISTORY_FILE}: {pe}")
+                return {}
+            except Exception as e:
+                print(f"Warning: Failed to load chat history from {CHAT_HISTORY_FILE}: {e}")
+                return {}
+    return {}
 
 
 def _save_all_chat_histories(data: dict) -> None:
-    try:
-        temp_file = CHAT_HISTORY_FILE.with_suffix(".tmp")
-        with open(temp_file, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-        temp_file.replace(CHAT_HISTORY_FILE)
-    except Exception as e:
-        print(f"Warning: Failed to save chat history to {CHAT_HISTORY_FILE}: {e}")
+    with _chat_history_lock:
+        temp_file = CHAT_HISTORY_FILE.parent / f"chat_history_{uuid.uuid4().hex[:8]}.tmp"
+        try:
+            with open(temp_file, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            
+            # Windows file locking retry loop for atomic file replacement
+            for attempt in range(5):
+                try:
+                    temp_file.replace(CHAT_HISTORY_FILE)
+                    break
+                except (PermissionError, OSError):
+                    if attempt < 4:
+                        time.sleep(0.05 * (attempt + 1))
+                    else:
+                        raise
+        except Exception as e:
+            print(f"Warning: Failed to save chat history to {CHAT_HISTORY_FILE}: {e}")
+        finally:
+            if temp_file.exists():
+                try:
+                    temp_file.unlink()
+                except Exception:
+                    pass
 
 
 # ---------------------------------------------------------------------------
@@ -1112,13 +1157,22 @@ def chat_with_agent(request: ChatRequest, db: Session = Depends(get_db)):
             grid_id = request.grid_evidence["grid_id"]
 
         # Get response from Claude with dynamic system prompt context
-        reply = agent.chat(
+        chat_output = agent.chat(
             user_message=request.message,
             chat_history=formatted_history,
             context_evidence=evidence_str,
             grid_id=grid_id,
             grid_evidence=request.grid_evidence
         )
+
+        if isinstance(chat_output, dict):
+            reply = chat_output.get("reply", "")
+            skill_used = chat_output.get("skill_used")
+            skills_used = chat_output.get("skills_used") or ([skill_used] if skill_used else [])
+        else:
+            reply = str(chat_output)
+            skill_used = None
+            skills_used = []
         
         reply_ts = datetime.now(timezone.utc).isoformat()
 
@@ -1131,7 +1185,13 @@ def chat_with_agent(request: ChatRequest, db: Session = Depends(get_db)):
                 # If grid_msgs is empty and client provided previous chat_history, initialize with it
                 if not grid_msgs and request.chat_history:
                     grid_msgs = [
-                        {"role": m.role, "content": m.content, "timestamp": m.timestamp}
+                        {
+                            "role": m.role,
+                            "content": m.content,
+                            "timestamp": m.timestamp,
+                            "skill_used": getattr(m, "skill_used", None),
+                            "skills_used": getattr(m, "skills_used", None)
+                        }
                         for m in request.chat_history
                     ]
                 
@@ -1143,7 +1203,9 @@ def chat_with_agent(request: ChatRequest, db: Session = Depends(get_db)):
                 grid_msgs.append({
                     "role": "assistant",
                     "content": reply,
-                    "timestamp": reply_ts
+                    "timestamp": reply_ts,
+                    "skill_used": skill_used,
+                    "skills_used": skills_used
                 })
                 histories[grid_key] = grid_msgs
                 _save_all_chat_histories(histories)
@@ -1152,7 +1214,9 @@ def chat_with_agent(request: ChatRequest, db: Session = Depends(get_db)):
 
         return ChatResponse(
             reply=reply,
-            timestamp=reply_ts
+            timestamp=reply_ts,
+            skill_used=skill_used,
+            skills_used=skills_used
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -1181,7 +1245,13 @@ def save_chat_history(payload: SaveChatHistoryRequest):
     histories = _load_all_chat_histories()
     grid_key = str(payload.grid_id)
     histories[grid_key] = [
-        {"role": msg.role, "content": msg.content, "timestamp": msg.timestamp}
+        {
+            "role": msg.role,
+            "content": msg.content,
+            "timestamp": msg.timestamp,
+            "skill_used": msg.skill_used,
+            "skills_used": msg.skills_used,
+        }
         for msg in payload.messages
     ]
     _save_all_chat_histories(histories)
@@ -1203,3 +1273,57 @@ def clear_chat_history(grid_id: Optional[int] = Query(None)):
     else:
         _save_all_chat_histories({})
         return {"status": "all_cleared"}
+
+
+# =====================================================================
+# PIPELINE STATUS, NETWORK GRAIN HEALTH & DIAGNOSTIC ENDPOINTS
+# Backing project slash commands: /check-pipeline, /network-health, /test-api, /review-anomaly
+# =====================================================================
+
+@router.get("/pipeline/status")
+def get_pipeline_status_endpoint(db: Session = Depends(get_db)):
+    """
+    Returns pipeline ingestion health, audit log summary, staleness,
+    and any rejected files/rows. Backs the /check-pipeline slash command.
+    """
+    from agent.tools import execute_tool
+    return execute_tool("get_pipeline_status", {}, db)
+
+
+@router.get("/pipeline/network-health")
+def get_network_health_endpoint(
+    target_date: Optional[str] = Query(None, alias="date"),
+    db: Session = Depends(get_db)
+):
+    """
+    Runs the grain duplicate check on hourly_grid_summary to verify that
+    analytics grain (date, hour, grid_id) is exactly 1 row per cell-hour.
+    Backs the /network-health slash command.
+    """
+    from agent.tools import execute_tool
+    args = {"date": target_date} if target_date else {}
+    return execute_tool("check_grain_duplicates", args, db)
+
+
+@router.post("/pipeline/test-api")
+def run_pipeline_test_api_endpoint(db: Session = Depends(get_db)):
+    """
+    Executes the FastAPI API test suite and returns pass/fail metrics.
+    Backs the /test-api slash command.
+    """
+    from agent.tools import execute_tool
+    return execute_tool("run_api_test_suite", {}, db)
+
+
+@router.get("/network/grid/{grid_id}/review-anomaly")
+def review_grid_anomaly_endpoint(
+    grid_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    Compares the rule alert, classifier output and anomaly score for a grid,
+    evaluating agreement/disagreement. Backs the /review-anomaly slash command.
+    """
+    validate_grid_id(grid_id)
+    from agent.tools import execute_tool
+    return execute_tool("review_grid_anomaly", {"grid_id": grid_id}, db)

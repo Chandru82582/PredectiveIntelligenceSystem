@@ -12,12 +12,12 @@ const FEATURE_LABELS = {
 
 export default function ActivityPrediction({ prediction, loading }) {
   if (loading && !prediction) {
-    return <div className="py-8 text-center text-[11px] text-slate-500">Scoring trailing history…</div>;
+    return <div className="py-8 text-center text-[11px] text-slate-500 dark:text-slate-400">Scoring trailing history…</div>;
   }
 
   if (!prediction) {
     return (
-      <div className="py-8 text-center text-[11px] text-slate-500">
+      <div className="py-8 text-center text-[11px] text-slate-500 dark:text-slate-400">
         Not enough trailing history for this grid to compute a prediction (needs at least 24h of prior hourly data).
       </div>
     );
@@ -32,37 +32,42 @@ export default function ActivityPrediction({ prediction, loading }) {
       <div className="flex flex-wrap items-center gap-4">
         <span
           className={`flex h-14 w-14 shrink-0 items-center justify-center rounded-full border-2 ${
-            isHigh ? 'border-rose-500/50 bg-rose-500/10 text-rose-300' : 'border-emerald-500/50 bg-emerald-500/10 text-emerald-300'
+            isHigh
+              ? 'border-rose-500/40 bg-rose-500/10 text-rose-600 dark:border-rose-500/50 dark:bg-rose-500/10 dark:text-rose-300'
+              : 'border-emerald-500/40 bg-emerald-500/10 text-emerald-600 dark:border-emerald-500/50 dark:bg-emerald-500/10 dark:text-emerald-300'
           }`}
         >
           {isHigh ? <AlertTriangle size={22} /> : <ShieldCheck size={22} />}
         </span>
 
         <div className="min-w-0">
-          <div className={`text-sm font-semibold ${isHigh ? 'text-rose-300' : 'text-emerald-300'}`}>
+          <div className={`text-sm font-semibold ${isHigh ? 'text-rose-600 dark:text-rose-300' : 'text-emerald-600 dark:text-emerald-300'}`}>
             {isHigh ? 'High-Activity Risk — Next Hour' : 'Normal — Next Hour'}
           </div>
-          <div className="text-[11px] text-slate-500">
-            LightGBM classifier - v2 · trained on {'>'}1.5x within-day baseline events · forecasting from{' '}
+          <div className="text-[11px] text-slate-500 dark:text-slate-400">
+            <span className="font-mono font-medium text-cyan-700 dark:text-cyan-400">
+              {prediction.model_name || 'LightGBM classifier'}
+            </span>
+            {' · '}trained on {'>'}1.5x within-day baseline events · forecasting from{' '}
             {new Date(prediction.feature_timestamp).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}
           </div>
         </div>
 
         <div className="ml-auto text-right">
-          <div className="font-mono text-2xl text-slate-100">{pct}%</div>
-          <div className="text-[10px] uppercase tracking-wide text-slate-500">predicted probability</div>
+          <div className="font-mono text-2xl text-slate-900 dark:text-slate-100">{pct}%</div>
+          <div className="text-[10px] uppercase tracking-wide text-slate-500 dark:text-slate-400">predicted probability</div>
         </div>
       </div>
 
       <div>
-        <div className="relative h-2.5 w-full overflow-hidden rounded-full bg-slate-800">
+        <div className="relative h-2.5 w-full overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
           <div
             className={`h-full rounded-full transition-all ${isHigh ? 'bg-rose-500' : 'bg-cyan-500'}`}
             style={{ width: `${pct}%` }}
           />
-          <div className="absolute inset-y-0 w-px bg-slate-400/70" style={{ left: `${thresholdPct}%` }} title={`Decision threshold: ${thresholdPct}%`} />
+          <div className="absolute inset-y-0 w-px bg-slate-500/70 dark:bg-slate-400/70" style={{ left: `${thresholdPct}%` }} title={`Decision threshold: ${thresholdPct}%`} />
         </div>
-        <div className="mt-1 flex items-center justify-between text-[10px] text-slate-500">
+        <div className="mt-1 flex items-center justify-between text-[10px] text-slate-500 dark:text-slate-400">
           <span className="flex items-center gap-1">
             <Gauge size={10} /> Decision threshold {thresholdPct}%
           </span>
@@ -75,9 +80,9 @@ export default function ActivityPrediction({ prediction, loading }) {
           const value = prediction.features?.[key];
           if (value === undefined) return null;
           return (
-            <div key={key} className="rounded border border-slate-800 bg-slate-900/60 p-2.5">
-              <div className="text-[10px] text-slate-500">{label}</div>
-              <div className="font-mono text-sm text-slate-200">{format(value)}</div>
+            <div key={key} className="rounded border border-slate-200 bg-white/80 p-2.5 shadow-sm dark:border-slate-800 dark:bg-slate-900/60 dark:shadow-none">
+              <div className="text-[10px] text-slate-500 dark:text-slate-400">{label}</div>
+              <div className="font-mono text-sm text-slate-800 dark:text-slate-200">{format(value)}</div>
             </div>
           );
         })}

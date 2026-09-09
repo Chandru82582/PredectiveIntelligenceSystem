@@ -20,60 +20,63 @@ import {
   Cpu
 } from 'lucide-react';
 import * as api from '../services/api';
+import { useTheme } from '../context/ThemeContext';
 
 const GRID_DIM = 100;
 const TOTAL_CELLS = 10000;
 
 // Color helpers
-function getCellColor(cell, colorMode, threshold) {
+function getCellColor(cell, colorMode, threshold, isDark = true) {
   const p = cell.p || 0;
   const act = cell.activity || 0;
   const isHigh = p >= threshold;
+  const deadzoneColor = isDark ? 'rgba(15, 23, 42, 0.6)' : 'rgba(226, 232, 240, 0.7)';
 
   if (colorMode === 'prediction') {
     if (isHigh) {
       // High activity risk: Rose
-      const alpha = 0.65 + Math.min(0.35, p * 0.4);
-      return `rgba(244, 63, 94, ${alpha})`;
+      const alpha = isDark ? 0.65 + Math.min(0.35, p * 0.4) : 0.75 + Math.min(0.25, p * 0.3);
+      return isDark ? `rgba(244, 63, 94, ${alpha})` : `rgba(225, 29, 72, ${alpha})`;
     }
     if (p >= threshold * 0.5) {
       // Elevated probability: Amber
-      return 'rgba(245, 158, 11, 0.75)';
+      return isDark ? 'rgba(245, 158, 11, 0.75)' : 'rgba(217, 119, 6, 0.85)';
     }
     if (act > 0) {
       // Normal activity: Cyan tone with intensity scaling
       const norm = Math.min(1, Math.max(0.15, Math.log10(act + 1) / 3.5));
-      return `rgba(6, 182, 212, ${norm * 0.8})`;
+      return isDark ? `rgba(6, 182, 212, ${norm * 0.8})` : `rgba(2, 132, 199, ${0.3 + norm * 0.65})`;
     }
-    // Deadzone / Zero activity: Deep slate
-    return 'rgba(15, 23, 42, 0.6)';
+    // Deadzone / Zero activity
+    return deadzoneColor;
   }
 
   if (colorMode === 'probability') {
     if (p >= threshold) {
-      return `rgba(244, 63, 94, ${0.7 + p * 0.3})`;
+      return isDark ? `rgba(244, 63, 94, ${0.7 + p * 0.3})` : `rgba(225, 29, 72, ${0.8 + p * 0.2})`;
     }
     if (p >= 0.4) {
-      return `rgba(245, 158, 11, ${0.6 + p * 0.4})`;
+      return isDark ? `rgba(245, 158, 11, ${0.6 + p * 0.4})` : `rgba(217, 119, 6, ${0.7 + p * 0.3})`;
     }
     if (p >= 0.15) {
-      return `rgba(6, 182, 212, ${0.4 + p * 0.5})`;
+      return isDark ? `rgba(6, 182, 212, ${0.4 + p * 0.5})` : `rgba(2, 132, 199, ${0.45 + p * 0.5})`;
     }
     if (act > 0) {
-      return 'rgba(16, 185, 129, 0.35)';
+      return isDark ? 'rgba(16, 185, 129, 0.35)' : 'rgba(13, 148, 136, 0.45)';
     }
-    return 'rgba(15, 23, 42, 0.6)';
+    return deadzoneColor;
   }
 
   // colorMode === 'activity'
-  if (act <= 0) return 'rgba(15, 23, 42, 0.6)';
+  if (act <= 0) return deadzoneColor;
   const norm = Math.min(1, Math.log10(act + 1) / 4);
-  if (norm > 0.8) return `rgba(244, 63, 94, ${norm})`;
-  if (norm > 0.5) return `rgba(245, 158, 11, ${norm})`;
-  return `rgba(6, 182, 212, ${norm * 0.9})`;
+  if (norm > 0.8) return isDark ? `rgba(244, 63, 94, ${norm})` : `rgba(225, 29, 72, ${norm})`;
+  if (norm > 0.5) return isDark ? `rgba(245, 158, 11, ${norm})` : `rgba(217, 119, 6, ${norm})`;
+  return isDark ? `rgba(6, 182, 212, ${norm * 0.9})` : `rgba(2, 132, 199, ${Math.max(0.3, norm * 0.95)})`;
 }
 
 export default function GridMatrix100({ selectedGridId, onSelectGrid, onNavigate }) {
+  const { isDark } = useTheme();
   const [matrixData, setMatrixData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -179,13 +182,13 @@ export default function GridMatrix100({ selectedGridId, onSelectGrid, onNavigate
       const x = col * cellSize;
       const y = screenRow * cellSize;
 
-      ctx.fillStyle = getCellColor(cell, colorMode, threshold);
+      ctx.fillStyle = getCellColor(cell, colorMode, threshold, isDark);
       ctx.fillRect(x, y, cellSize - gap, cellSize - gap);
     }
 
     // Draw Sector Boundaries if enabled (4x4 quadrants)
     if (showSectors) {
-      ctx.strokeStyle = 'rgba(51, 65, 85, 0.45)';
+      ctx.strokeStyle = isDark ? 'rgba(51, 65, 85, 0.45)' : 'rgba(148, 163, 184, 0.55)';
       ctx.lineWidth = 1;
       const sectorStep = width / 4;
       for (let s = 1; s < 4; s++) {
@@ -209,12 +212,12 @@ export default function GridMatrix100({ selectedGridId, onSelectGrid, onNavigate
       const hScreenRow = 99 - hoveredCell.row;
 
       // Crosshairs
-      ctx.fillStyle = 'rgba(6, 182, 212, 0.12)';
+      ctx.fillStyle = isDark ? 'rgba(6, 182, 212, 0.12)' : 'rgba(2, 132, 199, 0.14)';
       ctx.fillRect(hCol * cellSize, 0, cellSize, height);
       ctx.fillRect(0, hScreenRow * cellSize, width, cellSize);
 
       // Hover cell box
-      ctx.strokeStyle = '#38bdf8';
+      ctx.strokeStyle = isDark ? '#38bdf8' : '#0284c7';
       ctx.lineWidth = 2;
       ctx.strokeRect(hCol * cellSize - 1, hScreenRow * cellSize - 1, cellSize + 2, cellSize + 2);
     }
@@ -225,16 +228,16 @@ export default function GridMatrix100({ selectedGridId, onSelectGrid, onNavigate
       const sCol = targetCell.col;
       const sScreenRow = 99 - targetCell.row;
 
-      ctx.strokeStyle = '#f8fafc';
+      ctx.strokeStyle = isDark ? '#f8fafc' : '#0f172a';
       ctx.lineWidth = 2.5;
       ctx.strokeRect(sCol * cellSize - 1.5, sScreenRow * cellSize - 1.5, cellSize + 3, cellSize + 3);
 
       // Outer glowing ring
-      ctx.strokeStyle = targetCell.p >= threshold ? '#f43f5e' : '#06b6d4';
+      ctx.strokeStyle = targetCell.p >= threshold ? (isDark ? '#f43f5e' : '#e11d48') : (isDark ? '#06b6d4' : '#0284c7');
       ctx.lineWidth = 1.5;
       ctx.strokeRect(sCol * cellSize - 3.5, sScreenRow * cellSize - 3.5, cellSize + 7, cellSize + 7);
     }
-  }, [matrixData, colorMode, threshold, showSectors, hoveredCell, activeCardCell, selectedGridId, cellMap]);
+  }, [matrixData, colorMode, threshold, showSectors, hoveredCell, activeCardCell, selectedGridId, cellMap, isDark]);
 
   useEffect(() => {
     renderCanvas();
@@ -295,12 +298,12 @@ export default function GridMatrix100({ selectedGridId, onSelectGrid, onNavigate
     <div className="flex flex-col gap-4 font-sans text-slate-200">
       
       {/* TOP CONTROLS & STATS BAR */}
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-900/70 p-3.5 backdrop-blur shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white/80 p-3.5 backdrop-blur shadow-sm dark:border-slate-800 dark:bg-slate-900/70 transition-colors duration-150">
         
         {/* Left: View Mode Pills */}
         <div className="flex flex-wrap items-center gap-2">
-          <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-1.5 mr-1">
-            <Layers size={13} className="text-cyan-400" />
+          <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 flex items-center gap-1.5 mr-1">
+            <Layers size={13} className="text-cyan-600 dark:text-cyan-400" />
             <span>Coloring:</span>
           </div>
 
@@ -309,8 +312,8 @@ export default function GridMatrix100({ selectedGridId, onSelectGrid, onNavigate
             onClick={() => setColorMode('prediction')}
             className={`rounded-lg px-2.5 py-1 text-xs font-medium transition-all ${
               colorMode === 'prediction'
-                ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40 shadow-sm'
-                : 'bg-slate-950/60 text-slate-400 border border-slate-800 hover:text-slate-200'
+                ? 'bg-rose-500/15 text-rose-700 border border-rose-500/40 shadow-sm dark:bg-rose-500/20 dark:text-rose-300'
+                : 'bg-white text-slate-700 border border-slate-200 hover:text-slate-900 dark:bg-slate-950/60 dark:text-slate-400 dark:border-slate-800 dark:hover:text-slate-200'
             }`}
           >
             Model Prediction (Risk / Normal)
@@ -321,8 +324,8 @@ export default function GridMatrix100({ selectedGridId, onSelectGrid, onNavigate
             onClick={() => setColorMode('probability')}
             className={`rounded-lg px-2.5 py-1 text-xs font-medium transition-all ${
               colorMode === 'probability'
-                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-sm'
-                : 'bg-slate-950/60 text-slate-400 border border-slate-800 hover:text-slate-200'
+                ? 'bg-amber-500/15 text-amber-700 border border-amber-500/40 shadow-sm dark:bg-amber-500/20 dark:text-amber-300'
+                : 'bg-white text-slate-700 border border-slate-200 hover:text-slate-900 dark:bg-slate-950/60 dark:text-slate-400 dark:border-slate-800 dark:hover:text-slate-200'
             }`}
           >
             Continuous Probability
@@ -333,8 +336,8 @@ export default function GridMatrix100({ selectedGridId, onSelectGrid, onNavigate
             onClick={() => setColorMode('activity')}
             className={`rounded-lg px-2.5 py-1 text-xs font-medium transition-all ${
               colorMode === 'activity'
-                ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shadow-sm'
-                : 'bg-slate-950/60 text-slate-400 border border-slate-800 hover:text-slate-200'
+                ? 'bg-cyan-500/15 text-cyan-700 border border-cyan-500/40 shadow-sm dark:bg-cyan-500/20 dark:text-cyan-300'
+                : 'bg-white text-slate-700 border border-slate-200 hover:text-slate-900 dark:bg-slate-950/60 dark:text-slate-400 dark:border-slate-800 dark:hover:text-slate-200'
             }`}
           >
             Traffic Volume
@@ -343,14 +346,14 @@ export default function GridMatrix100({ selectedGridId, onSelectGrid, onNavigate
 
         {/* Right: Quick Search & Sector Toggle */}
         <div className="flex items-center gap-2.5 ml-auto">
-          <form onSubmit={handleSearch} className="flex items-center gap-1.5 rounded-lg border border-slate-800 bg-slate-950 px-2.5 py-1">
-            <Search size={12} className="text-slate-500" />
+          <form onSubmit={handleSearch} className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1 dark:border-slate-800 dark:bg-slate-950">
+            <Search size={12} className="text-slate-400 dark:text-slate-500" />
             <input
               type="text"
               value={searchId}
               onChange={(e) => setSearchId(e.target.value)}
               placeholder="Jump to cell (1-10000)"
-              className="w-36 bg-transparent font-mono text-xs text-slate-200 placeholder:text-slate-600 focus:outline-none"
+              className="w-36 bg-transparent font-mono text-xs text-slate-800 placeholder:text-slate-400 focus:outline-none dark:text-slate-200 dark:placeholder:text-slate-600"
             />
           </form>
 
@@ -359,8 +362,8 @@ export default function GridMatrix100({ selectedGridId, onSelectGrid, onNavigate
             onClick={() => setShowSectors(!showSectors)}
             className={`rounded-lg border px-2.5 py-1 text-xs font-mono transition-colors ${
               showSectors
-                ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-300'
-                : 'border-slate-800 bg-slate-950 text-slate-500 hover:text-slate-300'
+                ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-700 dark:text-cyan-300'
+                : 'border-slate-200 bg-white text-slate-600 hover:text-slate-900 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-500 dark:hover:text-slate-300'
             }`}
             title="Toggle Milan sector quadrants (A1-D4)"
           >
@@ -373,12 +376,12 @@ export default function GridMatrix100({ selectedGridId, onSelectGrid, onNavigate
       <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
         
         {/* Dynamic Threshold Slider */}
-        <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-3 flex flex-col justify-between">
+        <div className="rounded-xl border border-slate-200 bg-white/80 p-3 shadow-sm flex flex-col justify-between dark:border-slate-800 dark:bg-slate-900/50">
           <div className="flex items-center justify-between text-xs mb-1.5">
-            <span className="text-slate-400 flex items-center gap-1.5">
-              <Sliders size={12} className="text-amber-400" /> Sensitivity Threshold
+            <span className="text-slate-600 dark:text-slate-400 flex items-center gap-1.5">
+              <Sliders size={12} className="text-amber-500 dark:text-amber-400" /> Sensitivity Threshold
             </span>
-            <span className="font-mono font-semibold text-amber-300">
+            <span className="font-mono font-semibold text-amber-600 dark:text-amber-300">
               {(threshold * 100).toFixed(1)}%
             </span>
           </div>
@@ -389,7 +392,7 @@ export default function GridMatrix100({ selectedGridId, onSelectGrid, onNavigate
             step="0.01"
             value={threshold}
             onChange={(e) => setThreshold(parseFloat(e.target.value))}
-            className="w-full accent-amber-500 cursor-pointer h-1.5 bg-slate-800 rounded-lg"
+            className="w-full accent-amber-500 cursor-pointer h-1.5 bg-slate-200 dark:bg-slate-800 rounded-lg"
           />
           <div className="flex justify-between text-[10px] font-mono text-slate-500 mt-1">
             <span>Aggressive (10%)</span>
@@ -399,48 +402,48 @@ export default function GridMatrix100({ selectedGridId, onSelectGrid, onNavigate
         </div>
 
         {/* High Risk Count Metric */}
-        <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-3 flex items-center gap-3">
+        <div className="rounded-xl border border-slate-200 bg-white/80 p-3 shadow-sm flex items-center gap-3 dark:border-slate-800 dark:bg-slate-900/50">
           <div className={`h-10 w-10 rounded-lg flex items-center justify-center border shrink-0 ${
-            stats.highCount > 0 ? 'bg-rose-500/15 border-rose-500/30 text-rose-400' : 'bg-emerald-500/15 border-emerald-500/30 text-emerald-400'
+            stats.highCount > 0 ? 'bg-rose-500/15 border-rose-500/30 text-rose-500 dark:text-rose-400' : 'bg-emerald-500/15 border-emerald-500/30 text-emerald-500 dark:text-emerald-400'
           }`}>
             {stats.highCount > 0 ? <AlertTriangle size={18} /> : <ShieldCheck size={18} />}
           </div>
           <div className="min-w-0">
-            <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Flagged High-Risk</div>
-            <div className="text-xl font-mono font-bold text-slate-100">
-              {stats.highCount.toLocaleString()} <span className="text-xs font-normal text-slate-400">/ 10,000</span>
+            <div className="text-[10px] uppercase tracking-wider text-slate-500 dark:text-slate-400 font-semibold">Flagged High-Risk</div>
+            <div className="text-xl font-mono font-bold text-slate-900 dark:text-slate-100">
+              {stats.highCount.toLocaleString()} <span className="text-xs font-normal text-slate-500 dark:text-slate-400">/ 10,000</span>
             </div>
-            <div className="text-[10px] text-slate-400 truncate">
+            <div className="text-[10px] text-slate-500 dark:text-slate-400 truncate">
               {((stats.highCount / TOTAL_CELLS) * 100).toFixed(2)}% of metropolitan lattice
             </div>
           </div>
         </div>
 
         {/* Highest Anomaly Grid */}
-        <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-3 flex items-center gap-3">
-          <div className="h-10 w-10 rounded-lg bg-amber-500/15 border border-amber-500/30 text-amber-400 flex items-center justify-center shrink-0">
+        <div className="rounded-xl border border-slate-200 bg-white/80 p-3 shadow-sm flex items-center gap-3 dark:border-slate-800 dark:bg-slate-900/50">
+          <div className="h-10 w-10 rounded-lg bg-amber-500/15 border border-amber-500/30 text-amber-500 dark:text-amber-400 flex items-center justify-center shrink-0">
             <TrendingUp size={18} />
           </div>
           <div className="min-w-0">
-            <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Top Anomaly Probability</div>
-            <div className="text-xl font-mono font-bold text-amber-300">
+            <div className="text-[10px] uppercase tracking-wider text-slate-500 dark:text-slate-400 font-semibold">Top Anomaly Probability</div>
+            <div className="text-xl font-mono font-bold text-amber-600 dark:text-amber-300">
               {stats.maxProb ? `${(stats.maxProb * 100).toFixed(1)}%` : '—'}
             </div>
-            <div className="text-[10px] text-slate-400">
+            <div className="text-[10px] text-slate-500 dark:text-slate-400">
               Cell #{stats.maxProbGrid || '—'}
             </div>
           </div>
         </div>
 
         {/* Lattice Dimension & Ingestion Info */}
-        <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-3 flex items-center gap-3">
-          <div className="h-10 w-10 rounded-lg bg-cyan-500/15 border border-cyan-500/30 text-cyan-400 flex items-center justify-center shrink-0">
+        <div className="rounded-xl border border-slate-200 bg-white/80 p-3 shadow-sm flex items-center gap-3 dark:border-slate-800 dark:bg-slate-900/50">
+          <div className="h-10 w-10 rounded-lg bg-cyan-500/15 border border-cyan-500/30 text-cyan-600 dark:text-cyan-400 flex items-center justify-center shrink-0">
             <Cpu size={18} />
           </div>
           <div className="min-w-0">
-            <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Milan Lattice Grid</div>
-            <div className="text-xl font-mono font-bold text-cyan-300">100 × 100</div>
-            <div className="text-[10px] text-slate-400 truncate">
+            <div className="text-[10px] uppercase tracking-wider text-slate-500 dark:text-slate-400 font-semibold">Milan Lattice Grid</div>
+            <div className="text-xl font-mono font-bold text-cyan-700 dark:text-cyan-300">100 × 100</div>
+            <div className="text-[10px] text-slate-500 dark:text-slate-400 truncate">
               As of {matrixData?.as_of ? new Date(matrixData.as_of).toLocaleDateString() : 'Latest Ingestion'}
             </div>
           </div>
@@ -452,34 +455,34 @@ export default function GridMatrix100({ selectedGridId, onSelectGrid, onNavigate
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-5 items-start">
         
         {/* CANVAS CONTAINER (Left/Center) */}
-        <div className="xl:col-span-8 flex flex-col items-center justify-center rounded-xl border border-slate-800 bg-slate-950 p-4 sm:p-5 relative overflow-hidden shadow-2xl">
+        <div className="xl:col-span-8 flex flex-col items-center justify-center rounded-xl border border-slate-200 bg-white p-4 sm:p-5 relative overflow-hidden shadow-sm dark:border-slate-800 dark:bg-slate-950 transition-colors duration-150">
           
           {/* Compass & Sector orientation indicators */}
-          <div className="absolute top-2 left-3 text-[10px] font-mono text-slate-500 flex items-center gap-1 select-none">
-            <span className="text-cyan-400 font-bold">N</span> (Row 99) · Milan North Metro
+          <div className="absolute top-2 left-3 text-[10px] font-mono text-slate-500 dark:text-slate-400 flex items-center gap-1 select-none">
+            <span className="text-cyan-600 dark:text-cyan-400 font-bold">N</span> (Row 99) · Milan North Metro
           </div>
-          <div className="absolute bottom-2 left-3 text-[10px] font-mono text-slate-500 flex items-center gap-1 select-none">
-            <span className="text-cyan-400 font-bold">S</span> (Row 0) · Milan South Metro
+          <div className="absolute bottom-2 left-3 text-[10px] font-mono text-slate-500 dark:text-slate-400 flex items-center gap-1 select-none">
+            <span className="text-cyan-600 dark:text-cyan-400 font-bold">S</span> (Row 0) · Milan South Metro
           </div>
-          <div className="absolute top-2 right-3 text-[10px] font-mono text-slate-500 select-none">
-            East (Col 99) <span className="text-cyan-400 font-bold">E</span>
+          <div className="absolute top-2 right-3 text-[10px] font-mono text-slate-500 dark:text-slate-400 select-none">
+            East (Col 99) <span className="text-cyan-600 dark:text-cyan-400 font-bold">E</span>
           </div>
 
           {/* Zoom controls */}
-          <div className="absolute top-3 right-3 z-10 flex items-center gap-1 bg-slate-900/90 border border-slate-800 rounded-lg p-1 shadow-md">
+          <div className="absolute top-3 right-3 z-10 flex items-center gap-1 bg-white/95 border border-slate-200 rounded-lg p-1 shadow-md dark:bg-slate-900/90 dark:border-slate-800">
             <button
               type="button"
               onClick={() => setZoom((z) => Math.min(2.5, z + 0.25))}
-              className="p-1 hover:text-cyan-300 text-slate-400 transition-colors"
+              className="p-1 hover:text-cyan-600 text-slate-500 transition-colors dark:hover:text-cyan-300 dark:text-slate-400"
               title="Zoom in"
             >
               <ZoomIn size={14} />
             </button>
-            <span className="font-mono text-[10px] px-1 text-slate-300">{zoom.toFixed(1)}x</span>
+            <span className="font-mono text-[10px] px-1 text-slate-700 dark:text-slate-300">{zoom.toFixed(1)}x</span>
             <button
               type="button"
               onClick={() => setZoom((z) => Math.max(1, z - 0.25))}
-              className="p-1 hover:text-cyan-300 text-slate-400 transition-colors"
+              className="p-1 hover:text-cyan-600 text-slate-500 transition-colors dark:hover:text-cyan-300 dark:text-slate-400"
               title="Zoom out"
             >
               <ZoomOut size={14} />
@@ -487,7 +490,7 @@ export default function GridMatrix100({ selectedGridId, onSelectGrid, onNavigate
             <button
               type="button"
               onClick={() => setZoom(1)}
-              className="p-1 hover:text-amber-300 text-slate-400 transition-colors border-l border-slate-800 pl-1.5"
+              className="p-1 hover:text-amber-600 text-slate-500 transition-colors border-l border-slate-200 pl-1.5 dark:border-slate-800 dark:text-slate-400 dark:hover:text-amber-300"
               title="Reset Zoom"
             >
               <RotateCcw size={12} />
@@ -501,9 +504,9 @@ export default function GridMatrix100({ selectedGridId, onSelectGrid, onNavigate
             style={{ maxHeight: '720px' }}
           >
             {loading ? (
-              <div className="h-[640px] w-[640px] flex flex-col items-center justify-center text-slate-500 gap-3 border border-slate-800/80 rounded-lg bg-slate-900/40">
+              <div className="h-[640px] w-[640px] flex flex-col items-center justify-center text-slate-500 gap-3 border border-slate-200 rounded-lg bg-slate-50 dark:border-slate-800/80 dark:bg-slate-900/40">
                 <div className="h-8 w-8 animate-spin rounded-full border-2 border-cyan-500 border-t-transparent"></div>
-                <p className="font-mono text-xs text-cyan-400">Loading 10,000 Cell Predictive Lattice…</p>
+                <p className="font-mono text-xs text-cyan-600 dark:text-cyan-400">Loading 10,000 Cell Predictive Lattice…</p>
               </div>
             ) : (
               <canvas
@@ -513,7 +516,7 @@ export default function GridMatrix100({ selectedGridId, onSelectGrid, onNavigate
                 onMouseMove={handleMouseMove}
                 onMouseLeave={handleMouseLeave}
                 onClick={handleClick}
-                className="rounded border border-slate-800/90 shadow-2xl transition-all"
+                className="rounded border border-slate-200 dark:border-slate-800/90 shadow-md dark:shadow-2xl transition-all"
                 style={{
                   width: `${640 * zoom}px`,
                   height: `${640 * zoom}px`,
@@ -524,8 +527,8 @@ export default function GridMatrix100({ selectedGridId, onSelectGrid, onNavigate
           </div>
 
           {/* Bottom Legend */}
-          <div className="flex flex-wrap items-center justify-between w-full border-t border-slate-800/80 pt-3 px-2 text-xs">
-            <div className="flex flex-wrap items-center gap-4 text-[11px] text-slate-400 font-mono">
+          <div className="flex flex-wrap items-center justify-between w-full border-t border-slate-200 pt-3 px-2 text-xs dark:border-slate-800/80">
+            <div className="flex flex-wrap items-center gap-4 text-[11px] text-slate-600 dark:text-slate-400 font-mono">
               <div className="flex items-center gap-1.5">
                 <span className="h-3 w-3 rounded-sm bg-rose-500 border border-rose-400/50"></span>
                 <span>High-Activity Risk ({'>='}{(threshold * 100).toFixed(0)}%)</span>
@@ -539,13 +542,13 @@ export default function GridMatrix100({ selectedGridId, onSelectGrid, onNavigate
                 <span>Normal Activity</span>
               </div>
               <div className="flex items-center gap-1.5">
-                <span className="h-3 w-3 rounded-sm bg-slate-900 border border-slate-700"></span>
+                <span className="h-3 w-3 rounded-sm bg-slate-200 border border-slate-300 dark:bg-slate-900 dark:border-slate-700"></span>
                 <span>Zero / Minimal Traffic</span>
               </div>
             </div>
 
             {hoveredCell && (
-              <div className="font-mono text-[11px] text-cyan-300 bg-cyan-950/60 border border-cyan-800/50 px-2.5 py-0.5 rounded shadow-sm">
+              <div className="font-mono text-[11px] text-cyan-700 bg-cyan-50 border border-cyan-200 dark:text-cyan-300 dark:bg-cyan-950/60 dark:border-cyan-800/50 px-2.5 py-0.5 rounded shadow-sm">
                 Hovering: #{hoveredCell.grid_id} · Row {hoveredCell.row}, Col {hoveredCell.col} · Act: {hoveredCell.activity} · Prob: {((hoveredCell.p || 0) * 100).toFixed(1)}%
               </div>
             )}
@@ -556,22 +559,22 @@ export default function GridMatrix100({ selectedGridId, onSelectGrid, onNavigate
         {/* RIGHT: INTERACTIVE GRID DETAIL CARD */}
         <div className="xl:col-span-4 flex flex-col gap-4">
           {activeCardCell ? (
-            <div className="rounded-xl border border-slate-800 bg-slate-900/90 p-5 shadow-2xl animate-in fade-in duration-200">
+            <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-lg animate-in fade-in duration-200 dark:border-slate-800 dark:bg-slate-900/90">
               
               {/* Card Header */}
-              <div className="flex items-start justify-between border-b border-slate-800 pb-3.5 mb-4">
+              <div className="flex items-start justify-between border-b border-slate-200 pb-3.5 mb-4 dark:border-slate-800">
                 <div>
-                  <div className="text-[10px] font-mono uppercase tracking-wider text-slate-500 flex items-center gap-1.5">
-                    <MapPin size={12} className="text-cyan-400" />
+                  <div className="text-[10px] font-mono uppercase tracking-wider text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
+                    <MapPin size={12} className="text-cyan-600 dark:text-cyan-400" />
                     <span>Selected Cell</span>
                   </div>
-                  <div className="text-2xl font-mono font-bold text-slate-100 flex items-center gap-2 mt-0.5">
+                  <div className="text-2xl font-mono font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2 mt-0.5">
                     <span>#{activeCardCell.grid_id}</span>
-                    <span className="text-xs font-sans font-normal px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">
+                    <span className="text-xs font-sans font-normal px-2 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700">
                       {activeCardCell.sector || `Sector ${Math.floor(activeCardCell.row/25)}${Math.floor(activeCardCell.col/25)}`}
                     </span>
                   </div>
-                  <div className="text-[11px] font-mono text-slate-400 mt-1">
+                  <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400 mt-1">
                     {activeCardCell.lat ? `${activeCardCell.lat.toFixed(4)}°N, ${activeCardCell.lon.toFixed(4)}°E` : `Row ${activeCardCell.row}, Col ${activeCardCell.col}`}
                   </div>
                 </div>
@@ -579,7 +582,7 @@ export default function GridMatrix100({ selectedGridId, onSelectGrid, onNavigate
                 <button
                   type="button"
                   onClick={() => setActiveCardCell(null)}
-                  className="rounded-lg p-1 text-slate-500 hover:text-slate-300 hover:bg-slate-800 transition-colors"
+                  className="rounded-lg p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-100 dark:text-slate-500 dark:hover:text-slate-300 dark:hover:bg-slate-800 transition-colors"
                   title="Close Card"
                 >
                   <X size={16} />
@@ -587,15 +590,15 @@ export default function GridMatrix100({ selectedGridId, onSelectGrid, onNavigate
               </div>
 
               {/* Machine Learning Prediction Status */}
-              <div className="rounded-lg border border-slate-800 bg-slate-950/70 p-4 mb-4">
+              <div className="rounded-lg border border-slate-200 bg-slate-50/80 p-4 mb-4 dark:border-slate-800 dark:bg-slate-950/70">
                 <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Model Forecast:</span>
+                  <span className="text-xs font-semibold text-slate-600 dark:text-slate-400 uppercase tracking-wider">Model Forecast:</span>
                   {activeCardCell.p >= threshold ? (
-                    <span className="px-2.5 py-0.5 rounded-full text-xs font-bold font-mono border border-rose-500/40 bg-rose-500/20 text-rose-300 flex items-center gap-1">
+                    <span className="px-2.5 py-0.5 rounded-full text-xs font-bold font-mono border border-rose-500/40 bg-rose-500/15 text-rose-700 dark:bg-rose-500/20 dark:text-rose-300 flex items-center gap-1">
                       <AlertTriangle size={11} /> HIGH_ACTIVITY_RISK
                     </span>
                   ) : (
-                    <span className="px-2.5 py-0.5 rounded-full text-xs font-bold font-mono border border-emerald-500/40 bg-emerald-500/20 text-emerald-300 flex items-center gap-1">
+                    <span className="px-2.5 py-0.5 rounded-full text-xs font-bold font-mono border border-emerald-500/40 bg-emerald-500/15 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300 flex items-center gap-1">
                       <ShieldCheck size={11} /> NORMAL
                     </span>
                   )}
@@ -604,12 +607,12 @@ export default function GridMatrix100({ selectedGridId, onSelectGrid, onNavigate
                 {/* Probability Gauge Bar */}
                 <div className="mt-3">
                   <div className="flex justify-between text-xs font-mono mb-1">
-                    <span className="text-slate-400">Risk Probability:</span>
-                    <span className={`font-bold ${activeCardCell.p >= threshold ? 'text-rose-400' : 'text-cyan-300'}`}>
+                    <span className="text-slate-600 dark:text-slate-400">Risk Probability:</span>
+                    <span className={`font-bold ${activeCardCell.p >= threshold ? 'text-rose-600 dark:text-rose-400' : 'text-cyan-700 dark:text-cyan-300'}`}>
                       {((activeCardCell.p || 0) * 100).toFixed(1)}%
                     </span>
                   </div>
-                  <div className="relative h-2 w-full bg-slate-800 rounded-full overflow-hidden">
+                  <div className="relative h-2 w-full bg-slate-200 dark:bg-slate-800 rounded-full overflow-hidden">
                     <div
                       className={`h-full rounded-full transition-all ${
                         activeCardCell.p >= threshold ? 'bg-rose-500' : 'bg-cyan-500'
@@ -617,25 +620,25 @@ export default function GridMatrix100({ selectedGridId, onSelectGrid, onNavigate
                       style={{ width: `${Math.min(100, Math.max(2, (activeCardCell.p || 0) * 100))}%` }}
                     />
                     <div
-                      className="absolute inset-y-0 w-0.5 bg-amber-400/90 z-10"
+                      className="absolute inset-y-0 w-0.5 bg-amber-500 dark:bg-amber-400/90 z-10"
                       style={{ left: `${threshold * 100}%` }}
                       title={`Model Threshold: ${(threshold * 100).toFixed(1)}%`}
                     />
                   </div>
                   <div className="flex justify-between text-[10px] font-mono text-slate-500 mt-1">
                     <span>0%</span>
-                    <span className="text-amber-400/80">Threshold {(threshold * 100).toFixed(1)}%</span>
+                    <span className="text-amber-600 dark:text-amber-400/80">Threshold {(threshold * 100).toFixed(1)}%</span>
                     <span>100%</span>
                   </div>
                 </div>
 
-                <div className="mt-3 pt-2.5 border-t border-slate-800 text-[11px] text-slate-300 leading-relaxed">
+                <div className="mt-3 pt-2.5 border-t border-slate-200 dark:border-slate-800 text-[11px] leading-relaxed">
                   {activeCardCell.p >= threshold ? (
-                    <p className="text-rose-200">
+                    <p className="text-rose-700 dark:text-rose-200">
                       ⚠️ Probability exceeds decision threshold. Cell is forecasted to undergo a surge exceeding 1.5× baseline during the next operational window.
                     </p>
                   ) : (
-                    <p className="text-slate-400">
+                    <p className="text-slate-600 dark:text-slate-400">
                       ✓ Cell activity is within baseline statistical tolerances. No immediate congestion or surge risks flagged by the classifier.
                     </p>
                   )}
@@ -644,30 +647,30 @@ export default function GridMatrix100({ selectedGridId, onSelectGrid, onNavigate
 
               {/* Telemetry Snapshot Cards */}
               <div className="grid grid-cols-2 gap-2.5 mb-5">
-                <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-2.5">
-                  <div className="text-[10px] font-mono uppercase text-slate-500">Current Activity</div>
-                  <div className="text-base font-mono font-semibold text-cyan-300 mt-0.5">
+                <div className="rounded-lg border border-slate-200 bg-slate-50/80 p-2.5 dark:border-slate-800 dark:bg-slate-950/60">
+                  <div className="text-[10px] font-mono uppercase text-slate-500 dark:text-slate-400">Current Activity</div>
+                  <div className="text-base font-mono font-semibold text-cyan-700 dark:text-cyan-300 mt-0.5">
                     {activeCardCell.activity?.toFixed(1) || '0.0'} <span className="text-[10px] text-slate-500 font-normal">ops/hr</span>
                   </div>
                 </div>
 
-                <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-2.5">
-                  <div className="text-[10px] font-mono uppercase text-slate-500">24h Baseline</div>
-                  <div className="text-base font-mono font-semibold text-slate-300 mt-0.5">
+                <div className="rounded-lg border border-slate-200 bg-slate-50/80 p-2.5 dark:border-slate-800 dark:bg-slate-950/60">
+                  <div className="text-[10px] font-mono uppercase text-slate-500 dark:text-slate-400">24h Baseline</div>
+                  <div className="text-base font-mono font-semibold text-slate-700 dark:text-slate-300 mt-0.5">
                     {activeCardCell.baseline?.toFixed(1) || '0.0'} <span className="text-[10px] text-slate-500 font-normal">ops/hr</span>
                   </div>
                 </div>
 
-                <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-2.5">
-                  <div className="text-[10px] font-mono uppercase text-slate-500">Activity Growth</div>
-                  <div className="text-base font-mono font-semibold text-amber-300 mt-0.5">
+                <div className="rounded-lg border border-slate-200 bg-slate-50/80 p-2.5 dark:border-slate-800 dark:bg-slate-950/60">
+                  <div className="text-[10px] font-mono uppercase text-slate-500 dark:text-slate-400">Activity Growth</div>
+                  <div className="text-base font-mono font-semibold text-amber-700 dark:text-amber-300 mt-0.5">
                     {activeCardCell.growth ? `${activeCardCell.growth.toFixed(2)}x` : '1.00x'}
                   </div>
                 </div>
 
-                <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-2.5">
-                  <div className="text-[10px] font-mono uppercase text-slate-500">Peak Ratio</div>
-                  <div className="text-base font-mono font-semibold text-slate-300 mt-0.5">
+                <div className="rounded-lg border border-slate-200 bg-slate-50/80 p-2.5 dark:border-slate-800 dark:bg-slate-950/60">
+                  <div className="text-[10px] font-mono uppercase text-slate-500 dark:text-slate-400">Peak Ratio</div>
+                  <div className="text-base font-mono font-semibold text-slate-700 dark:text-slate-300 mt-0.5">
                     {activeCardCell.peak_ratio ? `${activeCardCell.peak_ratio.toFixed(2)}x` : '1.00x'}
                   </div>
                 </div>
@@ -687,31 +690,31 @@ export default function GridMatrix100({ selectedGridId, onSelectGrid, onNavigate
                 <button
                   type="button"
                   onClick={() => onNavigate?.(activeCardCell.grid_id, 'assistant')}
-                  className="w-full flex items-center justify-center gap-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold py-2 transition-colors"
+                  className="w-full flex items-center justify-center gap-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-200 text-xs font-semibold py-2 transition-colors dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-200 dark:border-slate-700"
                 >
-                  <MessageSquare size={14} className="text-cyan-400" />
+                  <MessageSquare size={14} className="text-cyan-600 dark:text-cyan-400" />
                   <span>Ask Claude NOC Agent About Cell #{activeCardCell.grid_id}</span>
                 </button>
               </div>
 
             </div>
           ) : (
-            <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-6 flex flex-col items-center justify-center text-center text-slate-500 h-[360px]">
-              <Crosshair size={32} className="text-slate-600 mb-3" />
-              <h3 className="text-sm font-semibold text-slate-300 mb-1">Click Any Cell to Inspect</h3>
-              <p className="text-xs text-slate-500 max-w-[240px] leading-relaxed">
+            <div className="rounded-xl border border-dashed border-slate-300 bg-white/70 p-6 flex flex-col items-center justify-center text-center text-slate-500 h-[360px] dark:border-slate-800 dark:bg-slate-900/40">
+              <Crosshair size={32} className="text-slate-400 dark:text-slate-600 mb-3" />
+              <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-300 mb-1">Click Any Cell to Inspect</h3>
+              <p className="text-xs text-slate-500 dark:text-slate-400 max-w-[240px] leading-relaxed">
                 Click on any of the 10,000 grid squares to inspect telemetry, ML predictions, growth dynamics, and launch triage.
               </p>
             </div>
           )}
 
           {/* Tips / Info Box */}
-          <div className="rounded-xl border border-slate-800/80 bg-slate-950/60 p-4 text-xs font-sans text-slate-400 space-y-2">
-            <div className="font-semibold text-slate-300 flex items-center gap-1.5 text-xs">
-              <Sparkles size={13} className="text-cyan-400" />
+          <div className="rounded-xl border border-slate-200 bg-white/80 p-4 text-xs font-sans text-slate-600 space-y-2 dark:border-slate-800/80 dark:bg-slate-950/60 dark:text-slate-400">
+            <div className="font-semibold text-slate-800 dark:text-slate-300 flex items-center gap-1.5 text-xs">
+              <Sparkles size={13} className="text-cyan-600 dark:text-cyan-400" />
               <span>100×100 Lattice Architecture</span>
             </div>
-            <p className="text-[11px] leading-relaxed text-slate-400">
+            <p className="text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
               Each grid cell covers ~235m × 235m across the Milan metro area. The LightGBM classifier scores all 10,000 cells to forecast activity spikes exceeding 1.5× within-day baselines in the upcoming hour.
             </p>
           </div>

@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
-import { AreaChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ComposedChart } from 'recharts';
+import { Area, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ComposedChart } from 'recharts';
+import { useTheme } from '../context/ThemeContext';
 
 function leaveOneOutMedian(values) {
   const n = values.length;
@@ -12,6 +13,7 @@ function leaveOneOutMedian(values) {
 }
 
 export default function ActivityConfidenceBand({ timeseries }) {
+  const { isDark, chartTheme } = useTheme();
   const [range, setRange] = useState([0, 23]);
 
   const rows = useMemo(() => {
@@ -36,7 +38,7 @@ export default function ActivityConfidenceBand({ timeseries }) {
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center gap-3">
-        <span className="w-8 shrink-0 font-mono text-[11px] text-slate-500">{String(range[0]).padStart(2, '0')}h</span>
+        <span className="w-8 shrink-0 font-mono text-[11px] text-slate-500 dark:text-slate-400">{String(range[0]).padStart(2, '0')}h</span>
         <div className="relative flex-1">
           <input
             type="range"
@@ -56,7 +58,7 @@ export default function ActivityConfidenceBand({ timeseries }) {
           />
           <div className="h-1" />
         </div>
-        <span className="w-8 shrink-0 text-right font-mono text-[11px] text-slate-500">{String(range[1]).padStart(2, '0')}h</span>
+        <span className="w-8 shrink-0 text-right font-mono text-[11px] text-slate-500 dark:text-slate-400">{String(range[1]).padStart(2, '0')}h</span>
       </div>
 
       <ResponsiveContainer width="100%" height={260}>
@@ -67,22 +69,22 @@ export default function ActivityConfidenceBand({ timeseries }) {
               <stop offset="100%" stopColor="#06b6d4" stopOpacity={0.02} />
             </linearGradient>
           </defs>
-          <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
-          <XAxis dataKey="label" tick={{ fill: '#64748b', fontSize: 10 }} axisLine={{ stroke: '#1e293b' }} tickLine={false} minTickGap={30} />
-          <YAxis tick={{ fill: '#64748b', fontSize: 10 }} axisLine={{ stroke: '#1e293b' }} tickLine={false} />
+          <CartesianGrid strokeDasharray="3 3" stroke={chartTheme.gridStroke} vertical={false} />
+          <XAxis dataKey="label" tick={{ fill: chartTheme.axisTick, fontSize: 10 }} axisLine={{ stroke: chartTheme.axisLine }} tickLine={false} minTickGap={30} />
+          <YAxis tick={{ fill: chartTheme.axisTick, fontSize: 10 }} axisLine={{ stroke: chartTheme.axisLine }} tickLine={false} />
           <Tooltip
-            contentStyle={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 6, fontSize: 11 }}
-            labelStyle={{ color: '#94a3b8' }}
+            contentStyle={chartTheme.tooltipContentStyle}
+            labelStyle={chartTheme.tooltipLabelStyle}
           />
           <Area type="monotone" dataKey="upper" stroke="none" fill="url(#confidenceFill)" isAnimationActive={false} />
-          <Line type="monotone" dataKey="baseline" stroke="#94a3b8" strokeDasharray="4 3" strokeWidth={1.5} dot={false} isAnimationActive={false} />
+          <Line type="monotone" dataKey="baseline" stroke={chartTheme.baselineStroke} strokeDasharray="4 3" strokeWidth={1.5} dot={false} isAnimationActive={false} />
           <Line type="monotone" dataKey="actual" stroke="#f59e0b" strokeWidth={2.5} dot={{ r: 2.5, fill: '#f59e0b' }} isAnimationActive={false} />
         </ComposedChart>
       </ResponsiveContainer>
 
-      <div className="flex items-center gap-4 text-[11px] text-slate-500">
-        <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-amber-400" /> Actual load</span>
-        <span className="flex items-center gap-1.5"><span className="h-0.5 w-3 bg-slate-400" /> LOO median baseline</span>
+      <div className="flex items-center gap-4 text-[11px] text-slate-500 dark:text-slate-400">
+        <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-amber-500 dark:bg-amber-400" /> Actual load</span>
+        <span className="flex items-center gap-1.5"><span className="h-0.5 w-3 bg-slate-500 dark:bg-slate-400" /> LOO median baseline</span>
         <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-cyan-500/50" /> Tolerance band (1.35x)</span>
       </div>
     </div>
