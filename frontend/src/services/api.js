@@ -708,7 +708,61 @@ export default {
   getNetworkHealthGrainCheck,
   runApiTestSuite,
   reviewGridAnomaly,
+  // Pipeline Tracker
+  uploadPipelineFiles,
+  getDagStatus,
+  getDagLogs,
+  getPipelineHistory,
   QUICK_SWITCH_GRIDS,
 };
 
+// ---------------------------------------------------------------------------
+// Pipeline Tracker API functions
+// ---------------------------------------------------------------------------
 
+/**
+ * Upload one or more CSV files to the pipeline landing zone.
+ * @param {FileList|File[]} files
+ * @returns {Promise<{uploaded:number, accepted:number, files:Array}>}
+ */
+export async function uploadPipelineFiles(files) {
+  const formData = new FormData();
+  for (const f of files) {
+    formData.append('files', f, f.name);
+  }
+  const url = new URL('/pipeline/upload', BASE_URL);
+  const headers = {};
+  if (API_KEY) headers['X-API-Key'] = API_KEY;
+  const res = await fetch(url.toString(), { method: 'POST', headers, body: formData });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`${res.status} ${res.statusText} — /pipeline/upload ${body}`.trim());
+  }
+  return res.json();
+}
+
+/**
+ * Poll the current DAG execution stage (inferred from filesystem).
+ * @returns {Promise<{stage:string, stage_label:string, progress_pct:number, active_files:string[]}>}
+ */
+export async function getDagStatus() {
+  return request('/pipeline/dag/status');
+}
+
+/**
+ * Fetch the last N lines of the pipeline log file.
+ * @param {number} lines  number of lines to tail (10–2000)
+ * @returns {Promise<{lines:string[], total_lines:number}>}
+ */
+export async function getDagLogs(lines = 200) {
+  return request('/pipeline/dag/logs', { lines });
+}
+
+/**
+ * Fetch processed-file history from audit_log.json (newest first).
+ * @param {number} limit  max entries (1–500)
+ * @returns {Promise<{entries:Array, total:number}>}
+ */
+export async function getPipelineHistory(limit = 100) {
+  return request('/pipeline/history', { limit });
+}

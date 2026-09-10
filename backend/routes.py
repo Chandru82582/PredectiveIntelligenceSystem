@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, Query, Header, APIRouter, Response
+from fastapi import FastAPI, Depends, HTTPException, Query, Header, APIRouter, Response, UploadFile, File
 from sqlalchemy.orm import sessionmaker, Session, declarative_base
 from auth import verify_api_key
 from datetime import datetime, date, timedelta, timezone
@@ -1326,4 +1326,182 @@ def review_grid_anomaly_endpoint(
     """
     validate_grid_id(grid_id)
     from agent.tools import execute_tool
-    return execute_tool("review_grid_anomaly", {"grid_id": grid_id}, db)
+    return execute_tool("review_grid_anomaly", {"grid_id": grid_id}, db)
+
+
+# =====================================================================
+# PIPELINE TRACKER — Upload, DAG Status, Logs, History
+# Powers the live Pipeline Tracker view in the React frontend.
+# =====================================================================
+
+import glob as _glob
+import fnmatch as _fnmatch
+
+# Resolve paths relative to the project root (same logic as ingestion_dag.py)
+_FLOW_ROOT   = Path(__file__).resolve().parent.parent / "flow"
+_LANDING_DIR  = _FLOW_ROOT / "data" / "landing"
+_PROCESSING_DIR = _FLOW_ROOT / "data" / "processing"
+_STAGING_DIR  = _FLOW_ROOT / "data" / "_staging"
+_RAW_DIR      = _FLOW_ROOT / "data" / "raw"
+_REJECTED_DIR = _FLOW_ROOT / "data" / "rejected"
+_LOG_DIR      = _FLOW_ROOT / "logs"
+_AUDIT_LOG    = _LOG_DIR / "audit_log.json"
+_PIPELINE_LOG = _LOG_DIR / "telecom_pipeline.log"
+_FILE_PATTERN = "sms-call-internet-mi-*.csv"
+
+# Ensure landing dir exists
+_LANDING_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _scan_dir_for_pattern(directory: Path, pattern: str = _FILE_PATTERN) -> list:
+    """Return list of matching filenames in a directory."""
+    if not directory.exists():
+        return []
+    return [p.name for p in directory.iterdir() if _fnmatch.fnmatch(p.name, pattern)]
+
+
+def _infer_dag_stage() -> dict:
+    """
+    Infer current DAG execution stage by scanning file locations.
+    Returns a dict with keys: stage, active_files, progress_pct, stage_label.
+    """
+    landing   = _scan_dir_for_pattern(_LANDING_DIR)
+    processing = _scan_dir_for_pattern(_PROCESSING_DIR)
+    staging_clean = list((_STAGING_DIR / "clean").glob("*")) if (_STAGING_DIR / "clean").exists() else []
+    staging_mysql = list((_STAGING_DIR / "mysql").glob("*")) if (_STAGING_DIR / "mysql").exists() else []
+
+    if staging_mysql:
+        stage = "mysql_ingesting"
+        label = "MySQL Ingest"
+        pct   = 85
+        active = [p.name for p in staging_mysql]
+    elif staging_clean:
+        stage = "spark_processing"
+        label = "Spark Process"
+        pct   = 65
+        active = [p.name for p in staging_clean]
+    elif processing:
+        stage = "validating"
+        label = "Validate"
+        pct   = 40
+        active = processing
+    elif landing:
+        stage = "ingesting"
+        label = "Ingest"
+        pct   = 20
+        active = landing
+    else:
+        stage = "idle"
+        label = "Idle — Waiting for Files"
+        pct   = 0
+        active = []
+
+    return {
+        "stage": stage,
+        "stage_label": label,
+        "progress_pct": pct,
+        "active_files": active,
+        "landing_count": len(landing),
+        "processing_count": len(processing),
+    }
+
+
+@router.post("/pipeline/upload")
+async def upload_pipeline_files(
+    files: list[UploadFile] = File(...),
+):
+    """
+    Accept one or more CSV files, validate filename against the DAG pattern
+    `sms-call-internet-mi-*.csv`, and write accepted files to the landing zone.
+    Returns per-file results so the frontend can show granular status.
+    """
+    results = []
+    for upload in files:
+        filename = upload.filename or ""
+        if not _fnmatch.fnmatch(filename, _FILE_PATTERN):
+            results.append({
+                "filename": filename,
+                "status": "rejected",
+                "reason": f"Filename must match pattern '{_FILE_PATTERN}'. "
+                          f"Expected format: sms-call-internet-mi-YYYY-MM-DD.csv",
+            })
+            continue
+
+        dest = _LANDING_DIR / filename
+        try:
+            content = await upload.read()
+            if len(content) == 0:
+                results.append({"filename": filename, "status": "rejected", "reason": "File is empty."})
+                continue
+            dest.write_bytes(content)
+            results.append({
+                "filename": filename,
+                "status": "accepted",
+                "size_bytes": len(content),
+                "destination": str(dest),
+            })
+        except Exception as exc:
+            results.append({"filename": filename, "status": "error", "reason": str(exc)})
+
+    accepted = sum(1 for r in results if r["status"] == "accepted")
+    return {"uploaded": len(files), "accepted": accepted, "files": results}
+
+
+@router.get("/pipeline/dag/status")
+def get_dag_status():
+    """
+    Infer the current Airflow DAG execution stage by scanning file locations
+    across landing / processing / _staging / raw directories.  No Airflow
+    REST API credentials required.
+    """
+    return _infer_dag_stage()
+
+
+@router.get("/pipeline/dag/logs")
+def get_dag_logs(lines: int = Query(200, ge=10, le=2000)):
+    """
+    Return the last `lines` lines of the pipeline log file so the frontend
+    can display a live task log terminal.
+    """
+    log_lines = []
+    if _PIPELINE_LOG.exists():
+        try:
+            with open(_PIPELINE_LOG, "r", encoding="utf-8", errors="replace") as fh:
+                all_lines = fh.readlines()
+                log_lines = [l.rstrip("\n") for l in all_lines[-lines:]]
+        except Exception as exc:
+            log_lines = [f"[error reading log] {exc}"]
+    else:
+        log_lines = ["[pipeline log not found — DAG has not run yet]"]
+
+    return {
+        "log_file": str(_PIPELINE_LOG),
+        "lines": log_lines,
+        "total_lines": len(log_lines),
+    }
+
+
+@router.get("/pipeline/history")
+def get_pipeline_history(limit: int = Query(100, ge=1, le=500)):
+    """
+    Read the audit_log.json (newline-delimited JSON) and return processed file
+    history sorted newest-first.  Used by the History side-panel in the UI.
+    """
+    entries = []
+    if _AUDIT_LOG.exists():
+        try:
+            with open(_AUDIT_LOG, "r", encoding="utf-8", errors="replace") as fh:
+                for raw_line in fh:
+                    line = raw_line.strip()
+                    if not line:
+                        continue
+                    try:
+                        entries.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        pass
+        except Exception as exc:
+            return {"entries": [], "error": str(exc)}
+
+    # Sort newest first, then cap
+    entries.sort(key=lambda e: e.get("processed_at", ""), reverse=True)
+    return {"entries": entries[:limit], "total": len(entries)}

@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
-import { RadioTower, Search, CircleDot } from 'lucide-react';
+import { RadioTower, Search, CircleDot, LayoutDashboard, ScanSearch, Table2, Bot, GitBranch } from 'lucide-react';
 import * as api from './services/api';
 import NetworkOverview from './views/NetworkOverview';
 import GridInvestigator from './views/GridInvestigator';
 import DataExplorer from './views/DataExplorer';
 import ClaudeAssistant from './views/ClaudeAssistant';
+import PipelineTracker from './views/PipelineTracker';
 import ThemeToggle from './components/ThemeToggle';
 import ModelSelector from './components/ModelSelector';
 
@@ -100,20 +101,22 @@ export default function App() {
 
           <nav className="flex rounded-full border border-slate-200 bg-slate-100/80 p-0.5 dark:border-slate-800 dark:bg-slate-900/70">
             {[
-              { id: 'overview', label: 'Network Overview & Map' },
-              { id: 'investigator', label: 'Grid Investigator' },
-              { id: 'data', label: 'Data' },
-              { id: 'assistant', label: 'NOC Assistant' },
+              { id: 'overview',     label: 'Network Overview & Map', icon: LayoutDashboard },
+              { id: 'investigator', label: 'Grid Investigator',       icon: ScanSearch },
+              { id: 'data',         label: 'Data',                    icon: Table2 },
+              { id: 'assistant',    label: 'NOC Assistant',           icon: Bot },
+              { id: 'pipeline',     label: 'Pipeline',                icon: GitBranch },
             ].map((t) => (
               <button
                 key={t.id}
                 onClick={() => setTab(t.id)}
-                className={`rounded-full px-3.5 py-1.5 text-[12px] font-medium transition-colors ${
+                className={`flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-[12px] font-medium transition-colors ${
                   tab === t.id
                     ? 'bg-white text-cyan-700 shadow-sm border border-slate-200/80 dark:border-transparent dark:bg-cyan-500/20 dark:text-cyan-300'
                     : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'
                 }`}
               >
+                <t.icon size={12} className={tab === t.id ? 'text-cyan-600 dark:text-cyan-400' : 'opacity-60'} />
                 {t.label}
               </button>
             ))}
@@ -197,6 +200,9 @@ export default function App() {
             gridId={selectedGridId}
             selectedModel={selectedModel}
           />
+        </div>
+        <div className={tab === 'pipeline' ? 'px-5 py-6' : 'hidden'}>
+          <PipelineTracker />
         </div>
       </main>
     </div>
