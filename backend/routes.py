@@ -1504,4 +1504,4 @@ def get_pipeline_history(limit: int = Query(100, ge=1, le=500)):
 
     # Sort newest first, then cap
     entries.sort(key=lambda e: e.get("processed_at", ""), reverse=True)
-    return {"entries": entries[:limit], "total": len(entries)}
+    return {"entries": entries[:limit], "total": len(entries)}

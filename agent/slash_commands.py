@@ -390,14 +390,74 @@ def execute_review_anomaly(grid_id: int, db: Session) -> str:
 # ---------------------------------------------------------------------------
 # Command 4: /test-api
 # ---------------------------------------------------------------------------
+def _check_claude_api_connection() -> dict:
+    """
+    Performs a minimal ping to the Anthropic API to verify key validity and connectivity.
+    Returns a dict with: connected (bool), model (str), latency_ms (float), error (str|None).
+    """
+    import os
+    import time as _time
+    try:
+        import anthropic as _anthropic
+    except ImportError:
+        return {"connected": False, "model": "N/A", "latency_ms": 0.0, "error": "anthropic package not installed"}
+
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        return {"connected": False, "model": "N/A", "latency_ms": 0.0, "error": "ANTHROPIC_API_KEY not set in environment"}
+
+    model = "claude-haiku-4-5-20251001"
+    t0 = _time.monotonic()
+    try:
+        _client = _anthropic.Anthropic(api_key=api_key)
+        _client.messages.create(
+            model=model,
+            max_tokens=8,
+            messages=[{"role": "user", "content": "ping"}]
+        )
+        latency_ms = round((_time.monotonic() - t0) * 1000, 1)
+        return {"connected": True, "model": model, "latency_ms": latency_ms, "error": None}
+    except Exception as exc:
+        latency_ms = round((_time.monotonic() - t0) * 1000, 1)
+        return {"connected": False, "model": model, "latency_ms": latency_ms, "error": str(exc)[:300]}
+
+
 def execute_test_api(db: Session) -> str:
+    # ── 1. Claude API connectivity check ──────────────────────────────────
+    claude_check = _check_claude_api_connection()
+    claude_connected = claude_check["connected"]
+    claude_model = html.escape(claude_check["model"])
+    claude_latency = claude_check["latency_ms"]
+    claude_error = html.escape(claude_check["error"] or "")
+
+    if claude_connected:
+        claude_badge = '<span class="px-2.5 py-0.5 rounded-full text-xs font-bold font-mono border border-emerald-500/30 bg-emerald-500/15 text-emerald-400">CONNECTED</span>'
+        claude_detail_html = f'<span class="text-emerald-400">✓</span> Model <code class="font-mono text-cyan-300">{claude_model}</code> responded in <span class="text-cyan-400 font-semibold">{claude_latency} ms</span>'
+    else:
+        claude_badge = '<span class="px-2.5 py-0.5 rounded-full text-xs font-bold font-mono border border-rose-500/30 bg-rose-500/15 text-rose-400">UNREACHABLE</span>'
+        claude_detail_html = f'<span class="text-rose-400">✗</span> <span class="text-slate-300">{claude_error or "Connection failed"}</span>'
+
+    # ── 2. REST endpoint test suite ────────────────────────────────────────
     res = execute_tool("run_api_test_suite", {}, db)
-    total = res.get("total", 0)
-    passed = res.get("passed", 0)
-    failed = res.get("failed", 0)
-    errors = res.get("errors", 0)
     duration_s = res.get("duration_seconds", 0.0)
-    tests = res.get("tests", [])
+    tests = list(res.get("tests", []))
+
+    # Add Claude API Gateway Connection check into the endpoints list
+    claude_test_item = {
+        "name": "Claude LLM API Gateway",
+        "endpoint": "POST https://api.anthropic.com/v1/messages",
+        "status": "PASS" if claude_connected else "FAIL",
+        "status_code": 200 if claude_connected else (401 if "401" in claude_error else 500),
+        "duration_ms": claude_latency,
+        "error": None if claude_connected else f"Claude API authentication/connection error: {claude_error}"
+    }
+    tests.append(claude_test_item)
+
+    total = len(tests)
+    passed = sum(1 for t in tests if t.get("status") == "PASS")
+    failed = sum(1 for t in tests if t.get("status") == "FAIL")
+    errors = sum(1 for t in tests if t.get("status") == "ERROR")
+    duration_s = round(duration_s + (claude_latency / 1000.0), 2)
 
     is_all_passed = (failed == 0 and errors == 0 and total > 0)
 
@@ -456,20 +516,30 @@ def execute_test_api(db: Session) -> str:
     <div class="text-[11px] font-mono text-slate-500">Duration: {duration_s:.2f}s</div>
   </div>
 
-  <div class="grid grid-cols-4 gap-2">
-    <div class="rounded border border-slate-800 bg-slate-900/50 p-2 text-center">
+  <!-- Claude API Connection Card -->
+  <div class="rounded-lg border {'border-emerald-500/30 bg-emerald-950/20' if claude_connected else 'border-rose-500/30 bg-rose-950/20'} p-3 flex items-center justify-between">
+    <div class="flex items-center gap-2">
+      <span class="text-xs uppercase tracking-wider font-semibold text-slate-400">Claude API:</span>
+      {claude_badge}
+    </div>
+    <div class="text-xs font-mono">{claude_detail_html}</div>
+  </div>
+
+  <!-- Horizontal 4-box KPI Grid -->
+  <div class="noc-kpi-grid flex flex-row gap-2 w-full" style="display: flex; flex-direction: row; gap: 8px; width: 100%;">
+    <div class="flex-1 rounded border border-slate-800 bg-slate-900/50 p-2 text-center" style="flex: 1; min-width: 0; text-align: center;">
       <div class="text-[10px] uppercase font-mono text-slate-500">Total</div>
       <div class="font-mono text-base font-semibold text-slate-200">{total}</div>
     </div>
-    <div class="rounded border border-slate-800 bg-slate-900/50 p-2 text-center">
+    <div class="flex-1 rounded border border-slate-800 bg-slate-900/50 p-2 text-center" style="flex: 1; min-width: 0; text-align: center;">
       <div class="text-[10px] uppercase font-mono text-slate-500">Passed</div>
       <div class="font-mono text-base font-semibold text-emerald-400">{passed}</div>
     </div>
-    <div class="rounded border border-slate-800 bg-slate-900/50 p-2 text-center">
+    <div class="flex-1 rounded border border-slate-800 bg-slate-900/50 p-2 text-center" style="flex: 1; min-width: 0; text-align: center;">
       <div class="text-[10px] uppercase font-mono text-slate-500">Failed</div>
       <div class="font-mono text-base font-semibold { 'text-rose-400' if failed > 0 else 'text-slate-400' }">{failed}</div>
     </div>
-    <div class="rounded border border-slate-800 bg-slate-900/50 p-2 text-center">
+    <div class="flex-1 rounded border border-slate-800 bg-slate-900/50 p-2 text-center" style="flex: 1; min-width: 0; text-align: center;">
       <div class="text-[10px] uppercase font-mono text-slate-500">Errors</div>
       <div class="font-mono text-base font-semibold { 'text-amber-400' if errors > 0 else 'text-slate-400' }">{errors}</div>
     </div>
@@ -497,7 +567,7 @@ def execute_test_api(db: Session) -> str:
   {failure_details}
 
   <div class="text-[10px] font-mono text-slate-500 flex items-center justify-between border-t border-slate-800/60 pt-2">
-    <span>Runner: FastAPI In-Process TestClient</span>
+    <span>Runner: FastAPI TestClient + Anthropic Client</span>
     <span>Suite Status: {'PASS' if is_all_passed else 'ACTION_REQUIRED'}</span>
   </div>
 </div>"""

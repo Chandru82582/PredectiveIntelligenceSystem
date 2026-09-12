@@ -163,3 +163,19 @@ body {
   color: #f8fafc;
   font-weight: 600;
 }
+
+/* NOC KPI 4-box horizontal grid */
+.noc-kpi-grid,
+.noc-html-content .grid-cols-4 {
+  display: flex !important;
+  flex-direction: row !important;
+  gap: 0.5rem !important;
+  width: 100% !important;
+}
+
+.noc-kpi-grid > div,
+.noc-html-content .grid-cols-4 > div {
+  flex: 1 1 0% !important;
+  min-width: 0 !important;
+  text-align: center !important;
+}
