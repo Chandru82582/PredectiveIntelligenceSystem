@@ -49,6 +49,8 @@ class ClaudeNOCAgent:
     def __init__(self, db: Session):
         self.model = "claude-haiku-4-5-20251001"
         self.db = db
+        from agent.supervisor import SupervisorAgent
+        self.supervisor = SupervisorAgent(db=self.db, client=client)
 
     def _execute_tool(self, tool_name: str, tool_args: dict) -> dict:
         """Execute a tool call using the modular tools engine."""
@@ -86,9 +88,9 @@ class ClaudeNOCAgent:
     ) -> Dict[str, Any]:
         """
         Main chat loop handling:
-        1. Direct fast dispatch of project slash commands (/check-pipeline, /explain-grid, etc.)
-        2. Dynamic prompt generation and multi-turn Anthropic tool calling for general NOC inquiries.
-        Returns a dict with 'reply', 'skill_used', and 'skills_used'.
+        1. Direct fast dispatch of project slash commands (/check-pipeline, /explain-grid, etc.) with subagent tracking.
+        2. Parent supervisor investigation task coordinating the 4 specialist subagents and synthesizing findings.
+        Returns a dict with 'reply', 'skill_used', 'skills_used', 'subagents_called', 'active_agent', and 'specialist_reports'.
         """
         messages = chat_history or []
 
@@ -104,9 +106,12 @@ class ClaudeNOCAgent:
         if target_grid is None and parsed_evidence and isinstance(parsed_evidence, dict) and "grid_id" in parsed_evidence:
             target_grid = parsed_evidence["grid_id"]
 
-        # Check if the user message is a project slash command
         clean_msg = user_message.strip()
+
+        # Check if the user message is a project slash command
         if is_slash_command(clean_msg):
+            cmd_key = clean_msg.split()[0].lower()
+            cmd_skill = SLASH_COMMAND_TO_SKILL.get(cmd_key)
             slash_result = handle_slash_command(
                 clean_msg,
                 db=self.db,
@@ -114,32 +119,29 @@ class ClaudeNOCAgent:
                 context_evidence=parsed_evidence
             )
             if slash_result:
-                cmd_key = clean_msg.split()[0].lower()
-                cmd_skill = SLASH_COMMAND_TO_SKILL.get(cmd_key)
+                subagent_map = {
+                    "/check-pipeline": ["data_pipeline"],
+                    "/network-health": ["data_pipeline"],
+                    "/explain-grid": ["network_analysis", "ml_analysis", "data_pipeline"],
+                    "/review-anomaly": ["ml_analysis", "network_analysis"],
+                    "/test-api": ["api_agent"]
+                }
+                subagents_called = subagent_map.get(cmd_key, ["data_pipeline", "network_analysis"])
                 return {
                     "reply": slash_result,
                     "skill_used": cmd_skill,
-                    "skills_used": [cmd_skill] if cmd_skill else []
+                    "skills_used": [cmd_skill] if cmd_skill else [],
+                    "subagents_called": subagents_called,
+                    "active_agent": "supervisor"
                 }
 
-        from agent.skills import match_skills_for_prompt
-        matched = match_skills_for_prompt(user_message)
-        active_skills = [s["name"] for s in matched]
-
-        # If not a slash command, proceed with Claude LLM tool-calling loop
-        if not client:
-            return {
-                "reply": (
-                    '<div class="noc-report space-y-2 font-sans">'
-                    '<div class="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-amber-300 text-xs font-mono">'
-                    '<strong>Warning:</strong> ANTHROPIC_API_KEY is not configured. '
-                    'Use project slash commands (e.g. <code>/check-pipeline</code>, <code>/explain-grid</code>, '
-                    '<code>/review-anomaly</code>, <code>/test-api</code>, <code>/network-health</code>).'
-                    '</div></div>'
-                ),
-                "skill_used": active_skills[0] if active_skills else None,
-                "skills_used": active_skills
-            }
+        # For general queries, execute the parent Supervisor investigation task across specialist subagents
+        return self.supervisor.investigate(
+            user_message=clean_msg,
+            grid_id=target_grid,
+            grid_evidence=parsed_evidence,
+            chat_history=chat_history
+        )
 
         dynamic_system_prompt = self.build_system_prompt(
             target_grid_id=target_grid,

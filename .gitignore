@@ -52,3 +52,4 @@ dist-ssr
 *.joblib
 
 backend/chat_history.json
+po.txt

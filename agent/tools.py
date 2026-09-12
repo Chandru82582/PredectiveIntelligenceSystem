@@ -447,8 +447,42 @@ def execute_tool(tool_name: str, tool_args: dict, db: Session) -> dict:
                 return {"skill": skill_name, "runbook": content}
             return {"error": f"Skill '{skill_name}' not found. Available skills: network-anomaly-analysis, pipeline-troubleshooting, telecom-data-quality, api-review"}
 
-        elif tool_name in ["get_network_summary", "get_hotspots"]:
-            return {"info": f"{tool_name} successfully executed."}
+        elif tool_name == "get_network_summary":
+            try:
+                from routes import get_network_summary as api_summary
+                summary_obj = api_summary(db=db)
+                return {
+                    "total_activity": round(float(getattr(summary_obj, "total_activity", 0.0)), 2),
+                    "active_grids": int(getattr(summary_obj, "active_grids", 0)),
+                    "peak_hour": int(getattr(summary_obj, "peak_hour", 0)),
+                    "top_grid": int(getattr(summary_obj, "top_grid", 0)),
+                    "as_of": str(getattr(summary_obj, "as_of", ""))
+                }
+            except Exception as sum_err:
+                logger.warning(f"get_network_summary failed: {sum_err}")
+                return {"error": f"Failed to get network summary: {sum_err}"}
+
+        elif tool_name == "get_hotspots":
+            try:
+                limit = int(tool_args.get("limit", 5))
+                severity = tool_args.get("severity", "HIGH")
+                from routes import get_hotspots as api_hotspots
+                hotspot_obj = api_hotspots(limit=limit, severity=severity, db=db)
+                hotspots_list = getattr(hotspot_obj, "hotspots", [])
+                return {
+                    "count": len(hotspots_list),
+                    "hotspots": [
+                        {
+                            "grid_id": int(h.grid_id),
+                            "total_activity": round(float(h.total_activity), 2),
+                            "severity": str(h.severity)
+                        }
+                        for h in hotspots_list
+                    ]
+                }
+            except Exception as hot_err:
+                logger.warning(f"get_hotspots failed: {hot_err}")
+                return {"error": f"Failed to get hotspots: {hot_err}"}
 
         else:
             return {"error": f"Tool {tool_name} not implemented."}

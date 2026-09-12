@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Send, Activity, AlertTriangle, ShieldCheck, Map, Cpu, Server, Loader2, RotateCcw, Clock, Terminal, Zap, Sparkles } from 'lucide-react';
 import * as api from '../services/api';
+import SubagentTopology from '../components/SubagentTopology';
 
 const SLASH_COMMANDS = [
   {
@@ -193,6 +194,11 @@ export default function ClaudeAssistant({ gridId, selectedModel }) {
   // Real evidence state fetched from backend
   const [currentGridEvidence, setCurrentGridEvidence] = useState(null);
 
+  // Multi-Agent Swarm state tracking
+  const [subagentsCalled, setSubagentsCalled] = useState(['data_pipeline', 'network_analysis', 'ml_analysis']);
+  const [currentlyRunningAgent, setCurrentlyRunningAgent] = useState('supervisor');
+  const [specialistReports, setSpecialistReports] = useState({});
+
   // Active messages for the currently operated grid
   const currentMessages = historiesByGrid[gridId] || getInitialMessageForGrid(gridId);
 
@@ -370,6 +376,27 @@ export default function ClaudeAssistant({ gridId, selectedModel }) {
     updateMessagesForGrid(activeGridId, newMessages);
     setIsLoading(true);
 
+    // Identify candidate specialist subagents for real-time UI animation
+    const cleanLower = userMessage.toLowerCase();
+    let targetedAgents = ['data_pipeline', 'network_analysis', 'ml_analysis'];
+    if (cleanLower.startsWith('/check-pipeline') || cleanLower.startsWith('/network-health')) {
+      targetedAgents = ['data_pipeline'];
+    } else if (cleanLower.startsWith('/explain-grid')) {
+      targetedAgents = ['network_analysis', 'ml_analysis', 'data_pipeline'];
+    } else if (cleanLower.startsWith('/review-anomaly')) {
+      targetedAgents = ['ml_analysis', 'network_analysis'];
+    } else if (cleanLower.startsWith('/test-api')) {
+      targetedAgents = ['api_agent'];
+    } else if (cleanLower.includes('pipeline') || cleanLower.includes('etl') || cleanLower.includes('ingest') || cleanLower.includes('stale')) {
+      targetedAgents = ['data_pipeline'];
+    } else if (cleanLower.includes('api') || cleanLower.includes('endpoint') || cleanLower.includes('test')) {
+      targetedAgents = ['api_agent'];
+    } else if (cleanLower.includes('all') || cleanLower.includes('full') || cleanLower.includes('comprehensive') || cleanLower.includes('system')) {
+      targetedAgents = ['data_pipeline', 'network_analysis', 'ml_analysis', 'api_agent'];
+    }
+    setSubagentsCalled(targetedAgents);
+    setCurrentlyRunningAgent('supervisor');
+
     try {
       const BASE_URL = import.meta.env?.VITE_API_BASE_URL || 'http://localhost:8000';
       const API_KEY = import.meta.env?.VITE_API_KEY || 'development-key';
@@ -398,6 +425,16 @@ export default function ClaudeAssistant({ gridId, selectedModel }) {
       const data = await response.json();
       const assistantTimestamp = data.timestamp || new Date().toISOString();
       
+      if (data.subagents_called && Array.isArray(data.subagents_called) && data.subagents_called.length > 0) {
+        setSubagentsCalled(data.subagents_called);
+      }
+      if (data.active_agent) {
+        setCurrentlyRunningAgent(data.active_agent);
+      }
+      if (data.specialist_reports) {
+        setSpecialistReports(data.specialist_reports);
+      }
+
       updateMessagesForGrid(activeGridId, (prev) => [
         ...prev, 
         { 
@@ -405,7 +442,9 @@ export default function ClaudeAssistant({ gridId, selectedModel }) {
           content: data.reply, 
           timestamp: assistantTimestamp,
           skill_used: data.skill_used,
-          skills_used: data.skills_used || (data.skill_used ? [data.skill_used] : [])
+          skills_used: data.skills_used || (data.skill_used ? [data.skill_used] : []),
+          subagents_called: data.subagents_called,
+          specialist_reports: data.specialist_reports
         }
       ]);
 
@@ -445,62 +484,54 @@ export default function ClaudeAssistant({ gridId, selectedModel }) {
             <p className="text-sm">Syncing grid telemetry...</p>
           </div>
         ) : (
-          <div className="space-y-4 animate-in fade-in duration-300">
-            <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-sm dark:bg-slate-950/50 dark:border-slate-800 dark:shadow-inner">
-               <div className="text-xs font-semibold text-slate-500 tracking-wider uppercase mb-1 flex items-center gap-2">
-                 <Map size={14}/> Target Cell
-               </div>
-               <div className="text-2xl font-mono text-slate-900 dark:text-slate-100">#{currentGridEvidence.grid_id}</div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-sm dark:bg-slate-950/50 dark:border-slate-800 dark:shadow-inner">
-                  <div className="text-xs font-semibold text-slate-500 tracking-wider uppercase mb-1">Current Act.</div>
-                  <div className="text-lg font-mono text-cyan-700 dark:text-cyan-400 font-semibold">
-                    {currentGridEvidence.current_activity.toFixed(1)}
-                  </div>
-              </div>
-              <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-sm dark:bg-slate-950/50 dark:border-slate-800 dark:shadow-inner">
-                  <div className="text-xs font-semibold text-slate-500 tracking-wider uppercase mb-1">Baseline</div>
-                  <div className="text-lg font-mono text-slate-600 dark:text-slate-400">
-                    {currentGridEvidence.baseline_activity.toFixed(1)}
-                  </div>
-              </div>
-            </div>
-
-            <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-sm dark:bg-slate-950/50 dark:border-slate-800 dark:shadow-inner">
-               <div className="text-xs font-semibold text-slate-500 tracking-wider uppercase mb-2 flex items-center gap-2">
-                 <Cpu size={14}/> ML Prediction Score
-               </div>
-               <div className="flex items-end gap-3">
-                  <div className={`text-3xl font-mono font-bold ${currentGridEvidence.anomaly_score > 0.5 ? 'text-amber-600 dark:text-amber-500' : 'text-emerald-600 dark:text-emerald-400'}`}>
+          <div className="space-y-3 animate-in fade-in duration-300">
+            {/* 1. COMPACT ACTIVE NOC TELEMETRY HUD */}
+            <div className="rounded-lg border border-slate-200 bg-white/90 p-2.5 shadow-sm dark:border-slate-800 dark:bg-slate-950/60 space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5">
+                  <Map size={13} className="text-cyan-600 dark:text-cyan-400" />
+                  <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">Cell</span>
+                  <span className="font-mono text-sm font-bold text-slate-900 dark:text-slate-100">#{currentGridEvidence.grid_id}</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <Cpu size={13} className="text-amber-500" />
+                  <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">ML Risk</span>
+                  <span className={`font-mono text-xs font-bold ${currentGridEvidence.anomaly_score > 0.5 ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400'}`}>
                     {(currentGridEvidence.anomaly_score * 100).toFixed(1)}%
-                  </div>
-                  <div className="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1.5 uppercase tracking-wider">
-                    {currentGridEvidence.direction.replace('_', ' ')}
-                  </div>
-               </div>
+                  </span>
+                  <span className="text-[9px] font-mono uppercase px-1 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-500">
+                    {currentGridEvidence.direction.replace('_RISK', '').replace('_', ' ')}
+                  </span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 pt-1.5 border-t border-slate-200 dark:border-slate-800/80 text-[11px] font-mono">
+                <div className="bg-slate-50/80 dark:bg-slate-900/60 p-1.5 rounded border border-slate-200/60 dark:border-slate-800">
+                  <span className="text-slate-400 block text-[9px] uppercase tracking-wider">Act / Baseline</span>
+                  <span className="text-cyan-700 dark:text-cyan-400 font-semibold">{currentGridEvidence.current_activity.toFixed(1)}</span>
+                  <span className="text-slate-500"> / {currentGridEvidence.baseline_activity.toFixed(1)}</span>
+                </div>
+                <div className="bg-slate-50/80 dark:bg-slate-900/60 p-1.5 rounded border border-slate-200/60 dark:border-slate-800">
+                  <span className="text-slate-400 block text-[9px] uppercase tracking-wider">Rules Active</span>
+                  <span className="text-slate-700 dark:text-slate-300 font-semibold truncate block">
+                    {currentGridEvidence.rule_alerts.length > 0 ? currentGridEvidence.rule_alerts.join(', ') : 'None (Nominal)'}
+                  </span>
+                </div>
+              </div>
             </div>
 
-            <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-sm dark:bg-slate-950/50 dark:border-slate-800 dark:shadow-inner">
-               <div className="text-xs font-semibold text-slate-500 tracking-wider uppercase mb-2 flex items-center gap-2">
-                 <AlertTriangle size={14}/> Active Rules
-               </div>
-               <div className="flex flex-wrap gap-2">
-                  {currentGridEvidence.rule_alerts.length === 0 && (
-                    <span className="text-sm font-mono text-slate-400 dark:text-slate-600">None</span>
-                  )}
-                  {currentGridEvidence.rule_alerts.map(rule => (
-                    <span key={rule} className="px-2 py-1 bg-amber-500/15 text-amber-700 dark:text-amber-400 text-[11px] font-semibold rounded border border-amber-500/25 font-mono">
-                      {rule}
-                    </span>
-                  ))}
-               </div>
-            </div>
-            
-            <div className="text-[11px] text-slate-500 mt-6 pt-4 border-t border-slate-200 dark:border-slate-800 flex items-start gap-2">
-              <Server size={14} className="text-cyan-600 dark:text-cyan-500 shrink-0 mt-0.5"/> 
-              <p>This telemetry is automatically injected into the Agent's context window on every request.</p>
+            {/* 2. SPECIALIST MULTI-AGENT SWARM TOPOLOGY & LIVE RUNNER */}
+            <SubagentTopology
+              subagentsCalled={subagentsCalled}
+              currentlyRunningAgent={currentlyRunningAgent}
+              isQuerying={isLoading}
+              specialistReports={specialistReports}
+              activeGridId={gridId}
+            />
+
+            <div className="text-[10px] text-slate-500 mt-1 pt-2 border-t border-slate-200 dark:border-slate-800 flex items-start gap-1.5">
+              <Server size={12} className="text-cyan-600 dark:text-cyan-500 shrink-0 mt-0.5"/> 
+              <p>Specialist telemetry & findings are synchronized with the Supervisor on every query.</p>
             </div>
           </div>
         )}

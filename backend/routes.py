@@ -1169,10 +1169,16 @@ def chat_with_agent(request: ChatRequest, db: Session = Depends(get_db)):
             reply = chat_output.get("reply", "")
             skill_used = chat_output.get("skill_used")
             skills_used = chat_output.get("skills_used") or ([skill_used] if skill_used else [])
+            subagents_called = chat_output.get("subagents_called")
+            active_agent = chat_output.get("active_agent") or "supervisor"
+            specialist_reports = chat_output.get("specialist_reports")
         else:
             reply = str(chat_output)
             skill_used = None
             skills_used = []
+            subagents_called = None
+            active_agent = None
+            specialist_reports = None
         
         reply_ts = datetime.now(timezone.utc).isoformat()
 
@@ -1190,7 +1196,9 @@ def chat_with_agent(request: ChatRequest, db: Session = Depends(get_db)):
                             "content": m.content,
                             "timestamp": m.timestamp,
                             "skill_used": getattr(m, "skill_used", None),
-                            "skills_used": getattr(m, "skills_used", None)
+                            "skills_used": getattr(m, "skills_used", None),
+                            "subagents_called": getattr(m, "subagents_called", None),
+                            "specialist_reports": getattr(m, "specialist_reports", None)
                         }
                         for m in request.chat_history
                     ]
@@ -1205,7 +1213,9 @@ def chat_with_agent(request: ChatRequest, db: Session = Depends(get_db)):
                     "content": reply,
                     "timestamp": reply_ts,
                     "skill_used": skill_used,
-                    "skills_used": skills_used
+                    "skills_used": skills_used,
+                    "subagents_called": subagents_called,
+                    "specialist_reports": specialist_reports
                 })
                 histories[grid_key] = grid_msgs
                 _save_all_chat_histories(histories)
@@ -1216,10 +1226,29 @@ def chat_with_agent(request: ChatRequest, db: Session = Depends(get_db)):
             reply=reply,
             timestamp=reply_ts,
             skill_used=skill_used,
-            skills_used=skills_used
+            skills_used=skills_used,
+            subagents_called=subagents_called,
+            active_agent=active_agent,
+            specialist_reports=specialist_reports
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/agents/specialists")
+def get_specialist_agents(db: Session = Depends(get_db)):
+    """Returns definitions, responsibilities, and restricted toolsets of all specialist subagents."""
+    from agent.supervisor import SupervisorAgent
+    sup = SupervisorAgent(db=db)
+    return {
+        "supervisor": {
+            "name": "Supervisor Agent",
+            "role": "Lead NOC Operations Commander",
+            "responsibility": "Coordinates multi-agent investigations, delegates tasks to specialist subagents, and synthesizes multi-tier telemetry and predictions into unified reports.",
+            "subagents": ["data_pipeline", "network_analysis", "ml_analysis", "api_agent"]
+        },
+        "specialists": sup.get_specialist_registry_metadata()
+    }
 
 
 @router.get("/chat/history", response_model=ChatHistoryResponse)

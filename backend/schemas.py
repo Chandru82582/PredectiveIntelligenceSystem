@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field
 from datetime import datetime, date, timedelta
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 
 
 
@@ -220,6 +220,8 @@ class ChatMessage(BaseModel):
     timestamp: Optional[str] = None
     skill_used: Optional[str] = None
     skills_used: Optional[List[str]] = None
+    subagents_called: Optional[List[str]] = None
+    specialist_reports: Optional[Dict[str, Any]] = None
 
 class ChatRequest(BaseModel):
     grid_id: Optional[int] = None
@@ -232,6 +234,9 @@ class ChatResponse(BaseModel):
     timestamp: Optional[str] = None
     skill_used: Optional[str] = None
     skills_used: Optional[List[str]] = None
+    subagents_called: Optional[List[str]] = None
+    active_agent: Optional[str] = None
+    specialist_reports: Optional[Dict[str, Any]] = None
 
 class SaveChatHistoryRequest(BaseModel):
     grid_id: int
