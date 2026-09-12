@@ -1,0 +1,41 @@
+# ==============================================================================
+# Telecom Italia Milan Predictive Intelligence System - Requirements
+# ==============================================================================
+
+# Core API & Web Framework
+fastapi>=0.100.0,<1.0.0
+uvicorn[standard]>=0.22.0,<1.0.0
+pydantic>=2.0.0,<3.0.0
+python-multipart>=0.0.6
+httpx>=0.24.0
+
+# Database & ORM
+sqlalchemy>=2.0.0,<3.0.0
+mysql-connector-python>=8.0.0
+pymysql>=1.1.0
+
+# Machine Learning & Feature Engineering
+numpy>=1.24.0
+pandas>=2.0.0
+scikit-learn>=1.3.0
+lightgbm>=4.0.0
+joblib>=1.3.0
+pyarrow>=12.0.0
+scipy>=1.11.0
+
+# Autonomous AI Agent (Anthropic Claude NOC Copilot)
+anthropic>=0.25.0
+python-dotenv>=1.0.0
+
+# Data Analysis, Exploratory Notebooks & Plotting
+matplotlib>=3.7.0
+seaborn>=0.12.0
+
+# Big Data & Distributed ETL (Optional / Pipeline Execution)
+# Note: For running PySpark ETL jobs in flow/spark/ or DataAnalysis/
+pyspark>=3.5.0
+
+# Workflow Orchestration (Optional / Airflow DAGs)
+# Note: Airflow is recommended to run in a dedicated Linux/WSL/Docker environment.
+# pendulum>=2.1.2
+# apache-airflow>=2.7.0

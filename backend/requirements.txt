@@ -1,0 +1,28 @@
+# ==============================================================================
+# Backend & ML Serving Requirements (FastAPI, LightGBM, Claude Agent)
+# ==============================================================================
+
+# Core API & Web Framework
+fastapi>=0.100.0,<1.0.0
+uvicorn[standard]>=0.22.0,<1.0.0
+pydantic>=2.0.0,<3.0.0
+python-multipart>=0.0.6
+httpx>=0.24.0
+
+# Database & ORM
+sqlalchemy>=2.0.0,<3.0.0
+mysql-connector-python>=8.0.0
+pymysql>=1.1.0
+
+# Machine Learning & Feature Transformation (ml/ & DataAnalysis/preprocessor.py)
+numpy>=1.24.0
+pandas>=2.0.0
+scikit-learn>=1.3.0
+lightgbm>=4.0.0
+joblib>=1.3.0
+pyarrow>=12.0.0
+scipy>=1.11.0
+
+# Autonomous Claude NOC Copilot Agent (agent/)
+anthropic>=0.25.0
+python-dotenv>=1.0.0

@@ -1,0 +1,14 @@
+# ==============================================================================
+# Pipeline & Orchestration Requirements (Spark ETL & Airflow DAGs)
+# Recommended for Linux / WSL environment
+# ==============================================================================
+
+pyspark>=3.5.0
+pendulum>=2.1.2
+python-dotenv>=1.0.0
+mysql-connector-python>=8.0.0
+pandas>=2.0.0
+pyarrow>=12.0.0
+
+# Apache Airflow (install with appropriate constraints for your Python version, e.g.):
+# pip install "apache-airflow==2.7.3" --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-2.7.3/constraints-3.10.txt"
