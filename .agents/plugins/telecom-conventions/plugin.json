@@ -1,0 +1,33 @@
+{
+  "name": "telecom-conventions",
+  "version": "1.0.0",
+  "description": "Telecom Italia Milan Predictive Intelligence platform conventions, domain invariants, skills, slash commands, lifecycle hooks, and approved MCP server configuration.",
+  "author": "Telecom Predictive Intelligence Platform Team",
+  "license": "Proprietary",
+  "components": {
+    "rules": [
+      "rules/AGENTS.md",
+      "rules/CLAUDE.md"
+    ],
+    "skills": [
+      "api-review",
+      "network-anomaly-analysis",
+      "pipeline-troubleshooting",
+      "telecom-data-quality"
+    ],
+    "slash_commands": [
+      "/network-health",
+      "/check-pipeline",
+      "/explain-grid",
+      "/review-anomaly",
+      "/test-api"
+    ],
+    "hooks": [
+      "airflow-pipeline-guard",
+      "spark-ml-regression-guard"
+    ],
+    "mcp_servers": [
+      "telecom-intelligence"
+    ]
+  }
+}

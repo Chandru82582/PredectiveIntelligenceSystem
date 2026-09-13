@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "telecom-intelligence": {
+      "command": "python",
+      "args": [
+        "mcp_server/server.py"
+      ],
+      "env": {
+        "TELECOM_API_URL": "http://localhost:8000"
+      }
+    }
+  }
+}

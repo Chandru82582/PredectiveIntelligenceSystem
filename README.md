@@ -42,6 +42,21 @@ A production-ready Big Data and Predictive Intelligence platform for telecommuni
   - [Data Pipeline Execution](#data-pipeline-execution)
 - [11. API Specification](#11-api-specification)
 - [12. Testing &amp; Quality Assurance](#12-testing--quality-assurance)
+- [13. Model Context Protocol (MCP) Server](#13-model-context-protocol-mcp-server)
+  - [Thin Wrapper Architecture &amp; Zero Business Logic](#thin-wrapper-architecture--zero-business-logic)
+  - [MCP Tool Catalog](#mcp-tool-catalog)
+  - [Claude Desktop Configuration](#claude-desktop-configuration)
+  - [Running the MCP Server &amp; Verification](#running-the-mcp-server--verification)
+- [14. Automated Lifecycle Hooks &amp; Safety Guardrails](#14-automated-lifecycle-hooks--safety-guardrails)
+  - [Pre-Edit Airflow &amp; Pipeline Guard](#pre-edit-airflow--pipeline-guard)
+  - [Post-Edit Spark &amp; ML Regression Guard](#post-edit-spark--ml-regression-guard)
+  - [Hook Execution Audit Logs](#hook-execution-audit-logs)
+- [15. Team Customization Plugin (`telecom-conventions`)](#15-team-customization-plugin-telecom-conventions)
+  - [Plugin Architecture &amp; Manifest](#plugin-architecture--manifest)
+  - [Operational Slash Commands](#operational-slash-commands)
+  - [Clean Environment Verification](#clean-environment-verification)
+  - [Versioning &amp; RACI Ownership Model](#versioning--raci-ownership-model)
+- [License &amp; Dataset Attribution](#license--dataset-attribution)
 
 ---
 
@@ -182,6 +197,19 @@ PredectiveIntelligenceSystem/
 │   │   └── services/
 │   │       └── api.js              # Axios API client with error handling
 │   └── package.json                # Frontend dependencies
+├── mcp_server/                     # Model Context Protocol (MCP) server for external LLMs
+│   ├── server.py                   # FastMCP stdio/SSE server (7 thin wrappers, zero business logic)
+│   ├── test_server.py              # Automated MCP endpoint & tool verification suite
+│   └── README.md                   # MCP server architecture & Claude Desktop setup
+├── .agents/                        # Antigravity agent configuration, plugins, skills & hooks
+│   ├── hooks.json                  # Lifecycle hook definitions (PreToolUse & PostToolUse)
+│   ├── hooks/                      # Hook scripts (pre_edit_guard.py, post_edit_test.py, common.py)
+│   ├── logs/                       # Hook audit execution logs (hooks.log)
+│   ├── skills/                     # Domain skills (api-review, telecom-data-quality, etc.)
+│   └── plugins/                    # Team convention plugins
+│       └── telecom-conventions/     # Packaged conventions, rules, skills, commands & hooks
+├── .claude/                        # Claude Code slash command configurations
+│   └── commands/                   # /network-health, /check-pipeline, /explain-grid, etc.
 ├── data/                           # Landing directory for raw TSV/CSV files & GeoJSON
 ├── report/                         # Daily summary CSVs and alert export artifacts
 ├── report_spark/                   # Parquet analytical exports from Spark jobs
@@ -195,16 +223,21 @@ PredectiveIntelligenceSystem/
 
 | Component                        | Technology              | Primary Location                                  | Key Function                                                                 |
 | -------------------------------- | ----------------------- | ------------------------------------------------- | ---------------------------------------------------------------------------- |
-| **Data Cleaning & Rollup** | PySpark                 | `flow/spark/telecom_pipeline.py`                | Ingests 10-min records, rolls up to 1-hr, sums country codes, joins geometry |
-| **Pipeline DAG**           | Apache Airflow          | `flow/airflow_home/dags/ingestion_dag.py`       | Orchestrates Spark ETL, Parquet creation, and database loading               |
-| **Database Layer**         | MySQL / SQLAlchemy      | `backend/database.py`                           | Stores`hourly_grid_summary`, `enriched_spatial_hourly`, `grid_summary` |
-| **API Web Service**        | FastAPI / Uvicorn       | `backend/main.py`, `routes.py`                | Serves REST endpoints for dashboards, charts, alerts, and predictions        |
-| **ML Inference Runner**    | LightGBM / Joblib       | `backend/ml_model.py`                           | Loads`lgbm_high_activity_v2.joblib`, runs next-hour inference              |
-| **Feature Transformer**    | Pandas / NumPy          | `DataAnalysis/preprocessor.py`                  | Computes trailing rolling averages, lags, intra-day baselines                |
-| **NOC AI Copilot**         | Anthropic Python SDK    | `backend/claude_agent.py`                       | Claude 3.5 Sonnet agent with dynamic system prompt and DB tool calls         |
-| **100x100 Grid Matrix**    | HTML5 Canvas / React    | `frontend/src/components/GridMatrix100.jsx`     | High-performance canvas rendering of 10,000 cells with interactive tooltips  |
-| **Spatial Heatmap**        | Leaflet / React-Leaflet | `frontend/src/components/GeographicHeatmap.jsx` | Geographic choropleth map over Milan boundaries                              |
-| **API Client**             | Axios                   | `frontend/src/services/api.js`                  | HTTP client with automatic`X-API-Key` headers and parameter encoding       |
+| **Data Cleaning & Rollup** | PySpark                 | [`flow/spark/telecom_pipeline.py`](file:///D:/PredectiveIntelligenceSystem/flow/spark/telecom_pipeline.py) | Ingests 10-min records, rolls up to 1-hr, sums country codes, joins geometry |
+| **Pipeline DAG**           | Apache Airflow          | [`flow/airflow_home/dags/ingestion_dag.py`](file:///D:/PredectiveIntelligenceSystem/flow/airflow_home/dags/ingestion_dag.py) | Orchestrates Spark ETL, Parquet creation, and database loading               |
+| **Database Layer**         | MySQL / SQLAlchemy      | [`backend/database.py`](file:///D:/PredectiveIntelligenceSystem/backend/database.py) | Stores `hourly_grid_summary`, `enriched_spatial_hourly`, `grid_summary` |
+| **API Web Service**        | FastAPI / Uvicorn       | [`backend/main.py`](file:///D:/PredectiveIntelligenceSystem/backend/main.py), [`routes.py`](file:///D:/PredectiveIntelligenceSystem/backend/routes.py) | Serves REST endpoints for dashboards, charts, alerts, and predictions        |
+| **ML Inference Runner**    | LightGBM / Joblib       | [`backend/ml_model.py`](file:///D:/PredectiveIntelligenceSystem/backend/ml_model.py) | Loads `lgbm_high_activity_v2.joblib`, runs next-hour inference              |
+| **Feature Transformer**    | Pandas / NumPy          | [`DataAnalysis/preprocessor.py`](file:///D:/PredectiveIntelligenceSystem/DataAnalysis/preprocessor.py) | Computes trailing rolling averages, lags, intra-day baselines                |
+| **NOC AI Copilot**         | Anthropic Python SDK    | [`backend/claude_agent.py`](file:///D:/PredectiveIntelligenceSystem/backend/claude_agent.py) | Claude 3.5 Sonnet agent with dynamic system prompt and DB tool calls         |
+| **100x100 Grid Matrix**    | HTML5 Canvas / React    | [`frontend/src/components/GridMatrix100.jsx`](file:///D:/PredectiveIntelligenceSystem/frontend/src/components/GridMatrix100.jsx) | High-performance canvas rendering of 10,000 cells with interactive tooltips  |
+| **Spatial Heatmap**        | Leaflet / React-Leaflet | [`frontend/src/components/GeographicHeatmap.jsx`](file:///D:/PredectiveIntelligenceSystem/frontend/src/components/GeographicHeatmap.jsx) | Geographic choropleth map over Milan boundaries                              |
+| **API Client**             | Axios                   | [`frontend/src/services/api.js`](file:///D:/PredectiveIntelligenceSystem/frontend/src/services/api.js) | HTTP client with automatic `X-API-Key` headers and parameter encoding       |
+| **MCP Server**             | FastMCP / Python        | [`mcp_server/server.py`](file:///D:/PredectiveIntelligenceSystem/mcp_server/server.py) | FastMCP server exposing 7 thin wrapper tools with zero business logic       |
+| **Pre-Edit Guard Hook**    | Antigravity Hook        | [`.agents/hooks/pre_edit_guard.py`](file:///D:/PredectiveIntelligenceSystem/.agents/hooks/pre_edit_guard.py) | `PreToolUse` hook requiring confirmation before edits to Airflow / ETL configs |
+| **Post-Edit Regression Guard** | Antigravity Hook    | [`.agents/hooks/post_edit_test.py`](file:///D:/PredectiveIntelligenceSystem/.agents/hooks/post_edit_test.py) | `PostToolUse` hook running grain duplicate and ML2 leakage tests on Spark/ML edits |
+| **Team Conventions Plugin**| Antigravity Plugin      | [`.agents/plugins/telecom-conventions/plugin.json`](file:///D:/PredectiveIntelligenceSystem/.agents/plugins/telecom-conventions/plugin.json) | Bundled conventions plugin with rules, skills, commands, hooks & MCP config  |
+| **Operational Slash Commands** | Claude Markdown Commands| [`.claude/commands/`](file:///D:/PredectiveIntelligenceSystem/.claude/commands/) | Operational slash commands (`/network-health`, `/check-pipeline`, `/explain-grid`, etc.) |
 
 ---
 
@@ -450,6 +483,192 @@ print('Matrix cache verified: 10,000 cells present.')
 
 ---
 
+## 13. Model Context Protocol (MCP) Server
+
+The platform features an official Model Context Protocol (MCP) server located in [`mcp_server/`](file:///D:/PredectiveIntelligenceSystem/mcp_server/) that provides standardized, tool-based API access for Anthropic's Claude Desktop, Claude Code, and autonomous AI agents.
+
+### Thin Wrapper Architecture & Zero Business Logic
+
+The MCP server ([`mcp_server/server.py`](file:///D:/PredectiveIntelligenceSystem/mcp_server/server.py)) is implemented using FastMCP and strictly follows the **Thin Wrapper Pattern**:
+
+- **Zero Business Logic Invariant**: The MCP server never computes, aggregates, thresholds, or interprets telemetry data. All metrics, spatial operations, baseline evaluations, and risk scoring are delegated exclusively to the backend REST API endpoints (`/network/*` and `/pipeline/*`). If a new calculation is needed, it must be added to the backend API rather than the MCP layer.
+- **Strict Parameter Validation**: Validates all client inputs before request forwarding:
+  - `grid_id`: Constrained strictly to integers between `1` and `10000`.
+  - `limit`: Constrained to integers between `1` and `1000`.
+  - `severity`: Whitelisted to `LOW`, `MEDIUM`, or `HIGH`.
+  - `as_of`: Verified against ISO-8601 extended format (`YYYY-MM-DDTHH:MM:SS`).
+- **Security & SSRF Guardrails**: Target backend base URL is strictly validated (`http`/`https` scheme validation, loopback/private IP whitelisting, header injection prevention).
+
+### MCP Tool Catalog
+
+The server exposes 7 standard tools:
+
+| Tool Name | Wrapped REST Endpoint | Description | Arguments & Types |
+|---|---|---|---|
+| `network_summary` | `GET /network/summary` | High-level Milan telemetry summary, active cell count, peak operational hour, and top cell by activity. | `as_of` (string, optional ISO-8601) |
+| `grid_activity` | `GET /network/grid/{grid_id}` | Trailing 24-hour activity timeseries for a cell (total, sms, voice calls, internet telemetry). | `grid_id` (int, 1–10,000, required), `as_of` (string, optional), `date` (string, optional), `hour` (int, optional 0–23) |
+| `grid_features` | `GET /network/grid/{grid_id}/features` | Engineered ML feature vector (trailing rolling averages, lags, intra-day baseline ratios). | `grid_id` (int, 1–10,000, required), `as_of` (string, optional) |
+| `grid_location` | `GET /network/grid/{grid_id}/location` | Spatial coordinates (centroid latitude/longitude), polygon ring GeoJSON geometry, and operational sector tag. | `grid_id` (int, 1–10,000, required) |
+| `hotspots` | `GET /network/hotspots` | Ranked leaderboard of grid cells with highest activity volumes across the metropolitan lattice. | `limit` (int, 1–1,000, default: 10), `severity` (string, optional), `as_of` (string, optional) |
+| `alerts` | `GET /network/alerts` | Active rule-based anomalies and sudden activity surge notifications. | `limit` (int, 1–1,000, default: 50), `severity` (string, optional), `as_of` (string, optional) |
+| `pipeline_status` | `GET /pipeline/status` | Ingestion pipeline health, operational staleness in minutes, and dead-letter quarantine batch metrics. | *(None)* |
+
+### Claude Desktop Configuration
+
+To connect Claude Desktop to the platform's MCP server, add the following entry to your `claude_desktop_config.json` (`%APPDATA%\Claude\claude_desktop_config.json` on Windows):
+
+```json
+{
+  "mcpServers": {
+    "telecom-intelligence": {
+      "command": "python",
+      "args": [
+        "D:\\PredectiveIntelligenceSystem\\mcp_server\\server.py"
+      ],
+      "env": {
+        "PYTHONPATH": "D:\\PredectiveIntelligenceSystem",
+        "TELECOM_API_URL": "http://localhost:8000",
+        "TELECOM_API_KEY": "secret-key-change-in-production"
+      }
+    }
+  }
+}
+```
+
+### Running the MCP Server & Verification
+
+```bash
+# Run standalone stdio server (Claude Desktop default)
+python -m mcp_server.server
+
+# Run Server-Sent Events (SSE) server for remote agent networks
+python -m mcp_server.server --transport sse --host 127.0.0.1 --port 8001
+
+# Execute comprehensive MCP test suite across all 7 tools
+python mcp_server/test_server.py
+```
+
+---
+
+## 14. Automated Lifecycle Hooks & Safety Guardrails
+
+To prevent accidental data corruption and configuration drift, the repository enforces automated Antigravity lifecycle hooks defined in [`.agents/hooks.json`](file:///D:/PredectiveIntelligenceSystem/.agents/hooks.json).
+
+### Pre-Edit Airflow & Pipeline Guard
+
+- **Identifier**: `airflow-pipeline-guard`
+- **Hook Type**: `PreToolUse` on `replace_file_content` and `write_to_file`.
+- **Script**: [`.agents/hooks/pre_edit_guard.py`](file:///D:/PredectiveIntelligenceSystem/.agents/hooks/pre_edit_guard.py)
+- **Policy**: Editing Airflow DAG definitions, schedule parameters, database schema loaders, or orchestration pipelines (`flow/airflow_home/`, `flow/sql_ingestion/`, `ingestion_dag.py`) poses significant production risk. The hook intercepts write operations targeting these directories and returns `{"decision": "force_ask"}`, requiring explicit operator confirmation before any tool writes changes to disk. Modifying standard application code, tests, or documentation returns `{"decision": "allow"}` automatically.
+
+### Post-Edit Spark & ML Regression Guard
+
+- **Identifier**: `spark-ml-regression-guard`
+- **Hook Type**: `PostToolUse` on `replace_file_content` and `write_to_file`.
+- **Script**: [`.agents/hooks/post_edit_test.py`](file:///D:/PredectiveIntelligenceSystem/.agents/hooks/post_edit_test.py) (leveraging verification logic in [`.agents/hooks/common.py`](file:///D:/PredectiveIntelligenceSystem/.agents/hooks/common.py))
+- **Policy**: Modifications to Spark ETL pipelines (`flow/spark/`) or ML feature engineering (`DataAnalysis/`) can introduce silent, catastrophic failures. The hook automatically executes two non-negotiable verification checks immediately after code edits:
+  1. **Analytics Grain Uniqueness Check**: Queries `hourly_grid_summary` at the current operational snapshot (`MAX(date)` = `2013-11-07`) to verify that `(date, hour, grid_id)` has exactly 0 duplicate records.
+  2. **ML2 Feature Leakage Test**: Inspects [`DataAnalysis/preprocessor.py`](file:///D:/PredectiveIntelligenceSystem/DataAnalysis/preprocessor.py) to guarantee that all rolling statistics and lag transformations strictly reference historical observations ($t-1, t-2, \dots$) without lookahead bias or future-period leakage into the feature matrix.
+
+### Hook Execution Audit Logs
+
+Every hook execution—including caller details, target file path, evaluation decision (`allow`, `force_ask`, `deny`), and regression test outcomes (`PASS`/`FAIL`)—is immutably recorded in [`.agents/logs/hooks.log`](file:///D:/PredectiveIntelligenceSystem/.agents/logs/hooks.log) for enterprise compliance.
+
+---
+
+## 15. Team Customization Plugin (`telecom-conventions`)
+
+All organizational standards, domain invariants, diagnostic skills, slash commands, lifecycle hooks, and MCP configurations are packaged into a reusable team plugin under [`.agents/plugins/telecom-conventions/`](file:///D:/PredectiveIntelligenceSystem/.agents/plugins/telecom-conventions/).
+
+### Plugin Architecture & Manifest
+
+The plugin manifest [`.agents/plugins/telecom-conventions/plugin.json`](file:///D:/PredectiveIntelligenceSystem/.agents/plugins/telecom-conventions/plugin.json) bundles all platform intelligence:
+
+```json
+{
+  "name": "telecom-conventions",
+  "version": "1.0.0",
+  "description": "Telecom Italia Milan Predictive Intelligence platform conventions, domain invariants, skills, slash commands, lifecycle hooks, and approved MCP server configuration.",
+  "author": "Telecom Predictive Intelligence Platform Team",
+  "license": "Proprietary",
+  "components": {
+    "rules": [
+      "rules/AGENTS.md",
+      "rules/CLAUDE.md"
+    ],
+    "skills": [
+      "api-review",
+      "network-anomaly-analysis",
+      "pipeline-troubleshooting",
+      "telecom-data-quality"
+    ],
+    "slash_commands": [
+      "/network-health",
+      "/check-pipeline",
+      "/explain-grid",
+      "/review-anomaly",
+      "/test-api"
+    ],
+    "hooks": [
+      "airflow-pipeline-guard",
+      "spark-ml-regression-guard"
+    ],
+    "mcp_servers": [
+      "telecom-intelligence"
+    ]
+  }
+}
+```
+
+- **Domain Rules ([`rules/AGENTS.md`](file:///D:/PredectiveIntelligenceSystem/.agents/plugins/telecom-conventions/rules/AGENTS.md))**: Enforces core domain invariants across all human and agent interactions, notably the mandatory rule that elevated activity metrics must never be described as confirmed congestion.
+- **MCP Configuration ([`mcp_config.json`](file:///D:/PredectiveIntelligenceSystem/.agents/plugins/telecom-conventions/mcp_config.json))**: Provides preconfigured MCP connection blocks for direct IDE and CLI binding.
+
+### Operational Slash Commands
+
+The plugin equips Claude and Antigravity with 5 specialized operational shortcuts defined in [`.claude/commands/`](file:///D:/PredectiveIntelligenceSystem/.claude/commands/):
+
+| Command | Markdown Definition | Bound Skill | Operational Purpose |
+|---|---|---|---|
+| `/network-health` | [`.claude/commands/network-health.md`](file:///D:/PredectiveIntelligenceSystem/.claude/commands/network-health.md) | `telecom-data-quality` | Audits dataset grain uniqueness, 1–10,000 spatial bounds, coordinate integrity, and non-negative activity invariants. |
+| `/check-pipeline` | [`.claude/commands/check-pipeline.md`](file:///D:/PredectiveIntelligenceSystem/.claude/commands/check-pipeline.md) | `pipeline-troubleshooting` | Checks ETL pipeline freshness, ingestion latency, and inspects `report_spark/quarantine/` for rejected records. |
+| `/explain-grid` | [`.claude/commands/explain-grid.md`](file:///D:/PredectiveIntelligenceSystem/.claude/commands/explain-grid.md) | `network-anomaly-analysis` | Conducts a single-cell diagnostic analyzing 24h activity patterns, modality breakdown, and next-hour activity surge probability. |
+| `/review-anomaly` | [`.claude/commands/review-anomaly.md`](file:///D:/PredectiveIntelligenceSystem/.claude/commands/review-anomaly.md) | `network-anomaly-analysis` | Investigates active rule alerts, threshold deviations, and sudden volume spikes across the lattice. |
+| `/test-api` | [`.claude/commands/test-api.md`](file:///D:/PredectiveIntelligenceSystem/.claude/commands/test-api.md) | `api-review` | Executes the backend REST API test suite, validating endpoint contracts, HTTP status codes, and latency SLAs. |
+
+### Clean Environment Verification
+
+The plugin includes an automated verification script ([`clean_env_test/verify_installation.py`](file:///D:/PredectiveIntelligenceSystem/clean_env_test/verify_installation.py)) designed to test plugin installation in clean or isolated workspaces:
+
+1. **Manifest Integrity**: Validates that all referenced rules, skills, commands, hooks, and MCP servers exist on disk.
+2. **Command Functionality**: Executes the logic of `/network-health` against the database to confirm invariant checking.
+3. **Terminology Rule Enforcement**: Confirms that test outputs containing prohibited terminology (e.g., "congestion") are flagged and blocked by the domain guardrails.
+
+```bash
+# Run verification in clean test environment
+python clean_env_test/verify_installation.py
+```
+
+### Versioning & RACI Ownership Model
+
+To manage plugin lifecycle across multidisciplinary telecom teams:
+
+- **Semantic Versioning (`MAJOR.MINOR.PATCH`)**:
+  - `MAJOR`: Breaking changes to domain invariants, analytics grain modifications `(date, hour, grid_id)`, or database schema table alterations.
+  - `MINOR`: New diagnostic skills, additional slash commands, new MCP tools, or updated hook policies.
+  - `PATCH`: Documentation enhancements, prompt adjustments, bug fixes in verification scripts.
+
+- **RACI Governance Matrix**:
+
+| Role / Team | Plugin Packaging & Hooks | Domain Invariants & Rules | ML Models & Leakage Tests | Airflow ETL Pipelines |
+|---|---|---|---|---|
+| **Platform Engineering Team** | **Accountable (A)** | Consulted (C) | Consulted (C) | Consulted (C) |
+| **Data Engineering Team** | Responsible (R) | **Accountable (A)** | Informed (I) | **Accountable (A)** |
+| **ML / Data Science Team** | Consulted (C) | Responsible (R) | **Accountable (A)** | Informed (I) |
+| **NOC Operations Team** | Informed (I) | Consulted (C) | Informed (I) | Informed (I) |
+
+---
+
 ## License & Dataset Attribution
 
 The telecommunication dataset used in this platform is provided by **Telecom Italia** as part of the **Big Data Challenge Open Data initiative**. The dataset is distributed under the Open Database License (ODbL).
+
