@@ -450,6 +450,12 @@ def get_grid_geography(grid_id: int, db: Session = Depends(get_db)):
     return GridGeography(grid_id=grid_id, **geo)
 
 
+@router.get("/network/grid/{grid_id}/location", response_model=GridGeography)
+def get_grid_location(grid_id: int, db: Session = Depends(get_db)):
+    """Single-cell lat/lon centroid + polygon + sector label."""
+    return get_grid_geography(grid_id=grid_id, db=db)
+
+
 @router.get("/network/grids/geography", response_model=GridGeographyResponse)
 def get_grids_geography(
     grid_ids: Optional[str] = Query(None, description="Comma-separated grid_id list; omit for all grids active at as_of"),

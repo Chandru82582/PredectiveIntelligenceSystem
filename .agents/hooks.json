@@ -1,0 +1,30 @@
+{
+  "airflow-pipeline-guard": {
+    "PreToolUse": [
+      {
+        "matcher": "replace_file_content|write_to_file",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python -c \"import os, sys, subprocess; f = os.path.abspath('hooks/pre_edit_guard.py') if os.path.exists('hooks/pre_edit_guard.py') else os.path.abspath('.agents/hooks/pre_edit_guard.py'); sys.exit(subprocess.call([sys.executable, f]))\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  },
+  "spark-ml-regression-guard": {
+    "PostToolUse": [
+      {
+        "matcher": "replace_file_content|write_to_file",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python -c \"import os, sys, subprocess; f = os.path.abspath('hooks/post_edit_test.py') if os.path.exists('hooks/post_edit_test.py') else os.path.abspath('.agents/hooks/post_edit_test.py'); sys.exit(subprocess.call([sys.executable, f]))\"",
+            "timeout": 60
+          }
+        ]
+      }
+    ]
+  }
+}
