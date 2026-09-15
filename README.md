@@ -164,7 +164,7 @@ PredectiveIntelligenceSystem/
 │       └── README.md               # Star schema technical documentation
 ├── DataAnalysis/                   # ML Research, Feature Engineering & Notebooks
 │   ├── models/
-│   │   └── lgbm_high_activity_v2.joblib # Production LightGBM model bundle
+│   │   └── lgbm_high_activity_v3.joblib # Production LightGBM model bundle (v3, v2, v1)
 │   ├── preprocessor.py             # Feature engineering transformer (rolling lags)
 │   ├── train.py                    # Model training, hyperparameter tuning & evaluation
 │   ├── cleaner_spark.py            # Data cleaning utilities
@@ -227,7 +227,7 @@ PredectiveIntelligenceSystem/
 | **Pipeline DAG**           | Apache Airflow          | [`flow/airflow_home/dags/ingestion_dag.py`](file:///D:/PredectiveIntelligenceSystem/flow/airflow_home/dags/ingestion_dag.py) | Orchestrates Spark ETL, Parquet creation, and database loading               |
 | **Database Layer**         | MySQL / SQLAlchemy      | [`backend/database.py`](file:///D:/PredectiveIntelligenceSystem/backend/database.py) | Stores `hourly_grid_summary`, `enriched_spatial_hourly`, `grid_summary` |
 | **API Web Service**        | FastAPI / Uvicorn       | [`backend/main.py`](file:///D:/PredectiveIntelligenceSystem/backend/main.py), [`routes.py`](file:///D:/PredectiveIntelligenceSystem/backend/routes.py) | Serves REST endpoints for dashboards, charts, alerts, and predictions        |
-| **ML Inference Runner**    | LightGBM / Joblib       | [`backend/ml_model.py`](file:///D:/PredectiveIntelligenceSystem/backend/ml_model.py) | Loads `lgbm_high_activity_v2.joblib`, runs next-hour inference              |
+| **ML Inference Runner**    | LightGBM / Joblib       | [`ml/predict.py`](file:///D:/PredectiveIntelligenceSystem/ml/predict.py) | Dynamically loads highest available model (`lgbm_high_activity_v3.joblib`), runs next-hour inference |
 | **Feature Transformer**    | Pandas / NumPy          | [`DataAnalysis/preprocessor.py`](file:///D:/PredectiveIntelligenceSystem/DataAnalysis/preprocessor.py) | Computes trailing rolling averages, lags, intra-day baselines                |
 | **NOC AI Copilot**         | Anthropic Python SDK    | [`backend/claude_agent.py`](file:///D:/PredectiveIntelligenceSystem/backend/claude_agent.py) | Claude 3.5 Sonnet agent with dynamic system prompt and DB tool calls         |
 | **100x100 Grid Matrix**    | HTML5 Canvas / React    | [`frontend/src/components/GridMatrix100.jsx`](file:///D:/PredectiveIntelligenceSystem/frontend/src/components/GridMatrix100.jsx) | High-performance canvas rendering of 10,000 cells with interactive tooltips  |
@@ -276,7 +276,7 @@ The relational database implements a high-performance analytics schema:
 
 ### High Activity Predictor (LightGBM)
 
-The system trains a gradient-boosted decision tree (`lgbm_high_activity_v2.joblib`) to answer an essential operational question:
+The system trains a gradient-boosted decision tree (`lgbm_high_activity_v3.joblib`, dynamically loading the highest available version) to answer an essential operational question:
 
 > *"Will this cell's activity during the upcoming hour exceed 1.5x its trailing intra-day baseline?"*
 

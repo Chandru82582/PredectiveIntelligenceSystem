@@ -83,7 +83,7 @@ export default function GridMatrix100({ selectedGridId, onSelectGrid, onNavigate
 
   // Settings & Filters
   const [colorMode, setColorMode] = useState('prediction'); // 'prediction' | 'probability' | 'activity'
-  const [threshold, setThreshold] = useState(0.7638);
+  const [threshold, setThreshold] = useState(0.7134);
   const [showSectors, setShowSectors] = useState(true);
   const [zoom, setZoom] = useState(1);
   const [searchId, setSearchId] = useState('');

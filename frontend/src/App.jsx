@@ -31,7 +31,7 @@ export default function App() {
       if (!mounted) return;
       const list = res.models || [];
       setAvailableModels(list);
-      setSelectedModel(res.default || list[0] || 'lgbm_high_activity_v2.joblib');
+      setSelectedModel(res.default || list[0] || 'lgbm_high_activity_v3.joblib');
     });
 
     // Background prefetch cache for remaining quick-switch grids and secondary tables

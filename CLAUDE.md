@@ -37,7 +37,7 @@ PredectiveIntelligenceSystem/
 │   ├── spark/              # PySpark data processing jobs (telecom_pipeline.py)
 │   └── sql_ingestion/      # Database schemas, table creation, and batch loaders
 ├── DataAnalysis/           # Exploratory data analysis, ML feature engineering & training
-│   ├── models/             # Trained ML model artifacts (lgbm_high_activity_v2.joblib)
+│   ├── models/             # Trained ML model artifacts (lgbm_high_activity_v3.joblib, v2, v1)
 │   ├── preprocessor.py     # DataPreprocessor pipeline for lag/rolling features
 │   ├── train.py            # LightGBM training and evaluation script
 │   └── notebooks/          # DataAnalysis.ipynb, featuring.ipynb
@@ -122,7 +122,7 @@ PredectiveIntelligenceSystem/
 | **Spark Pipeline** | [`flow/spark/telecom_pipeline.py`](file:///D:/PredectiveIntelligenceSystem/flow/spark/telecom_pipeline.py) | Schema casting, 10-min to 1-hr aggregation, country code summation, spatial enrichment |
 | **Airflow DAG** | [`flow/airflow_home/dags/ingestion_dag.py`](file:///D:/PredectiveIntelligenceSystem/flow/airflow_home/dags/ingestion_dag.py) | Orchestrates Spark pipeline, DB ingestion, and table indexing |
 | **API Routes** | [`backend/routes.py`](file:///D:/PredectiveIntelligenceSystem/backend/routes.py) | `/api/summary`, `/api/alerts`, `/api/grids`, `/api/predict/*`, `/api/grid-matrix`, `/api/chat` |
-| **ML Inference** | [`backend/ml_model.py`](file:///D:/PredectiveIntelligenceSystem/backend/ml_model.py) | `HighActivityPredictor`, loads `lgbm_high_activity_v2.joblib`, invokes `DataPreprocessor` |
+| **ML Inference** | [`ml/predict.py`](file:///D:/PredectiveIntelligenceSystem/ml/predict.py) | `HighActivityPredictor`, dynamically loads highest model version (`lgbm_high_activity_v3.joblib`), invokes `DataPreprocessor` |
 | **ML Feature Pipeline**| [`DataAnalysis/preprocessor.py`](file:///D:/PredectiveIntelligenceSystem/DataAnalysis/preprocessor.py) | Rolling averages, lags, baseline ratios. **Requires chronological ordering** |
 | **Claude Agent** | [`backend/claude_agent.py`](file:///D:/PredectiveIntelligenceSystem/backend/claude_agent.py) | Dynamic system prompt, tool execution (`get_network_summary`, `predict_high_activity`, etc.) |
 | **100x100 Grid Matrix** | [`frontend/src/components/GridMatrix100.jsx`](file:///D:/PredectiveIntelligenceSystem/frontend/src/components/GridMatrix100.jsx) | Canvas-rendered 10,000-cell interactive grid with hover/click detail modal |

@@ -26,7 +26,13 @@ if str(ROOT_DIR) not in sys.path:
 
 import pandas as pd
 from rules import AlertAnalyzer
-from ml import get_predictor, list_available_models, DEFAULT_MODEL_NAME
+from ml.predict import (
+    get_predictor,
+    list_available_models,
+    DEFAULT_MODEL_NAME,
+    DEFAULT_THRESHOLD,
+    get_default_threshold,
+)
 import math
 import json
 import re
@@ -642,9 +648,8 @@ def list_grids(
 
 # =====================================================================
 # PREDICTION ENDPOINT — serves the trained LightGBM "next-hour high
-# activity" classifier (DataAnalysis/models/lgbm_high_activity_v1.joblib)
-# via ml_model.py, which mirrors DataAnalysis/preprocessor.py's feature
-# engineering so training and serving stay identical.
+# activity" classifier (ml/models/lgbm_high_activity_v3.joblib)
+# via ml/predict.py, which dynamically loads the highest available model version.
 # =====================================================================
 
 # Rolling/lag features need >=24 prior hourly rows (see ml_model.py); this
@@ -655,11 +660,15 @@ _PREDICTION_LOOKBACK_HOURS = 95
 
 @router.get("/predict/models")
 def get_available_models():
-    """Returns all trained LightGBM models available in /ml/models directory."""
+    """Returns all trained LightGBM models available in /ml/models directory with their default thresholds."""
     models = list_available_models()
+    default_model = DEFAULT_MODEL_NAME if DEFAULT_MODEL_NAME in models else (models[0] if models else "")
+    thresholds = {m: round(float(get_default_threshold(m)), 4) for m in models}
     return {
         "models": models,
-        "default": DEFAULT_MODEL_NAME if DEFAULT_MODEL_NAME in models else (models[0] if models else "")
+        "default": default_model,
+        "default_threshold": thresholds.get(default_model, DEFAULT_THRESHOLD),
+        "thresholds": thresholds,
     }
 
 
@@ -668,6 +677,7 @@ def predict_grid_activity(
     grid_id: int,
     as_of: Optional[datetime] = None,
     model_name: Optional[str] = Query(None, description="Optional model filename from /ml/models"),
+    threshold: Optional[float] = Query(None, description="Optional decision threshold override (defaults to model bundle optimal threshold)"),
     db: Session = Depends(get_db),
 ):
     """Predicts whether `grid_id` is likely to enter a high-activity state
@@ -706,7 +716,7 @@ def predict_grid_activity(
     })
 
     model_name_str = model_name if isinstance(model_name, str) and model_name.strip() else None
-    predictor = get_predictor(model_name=model_name_str)
+    predictor = get_predictor(model_name=model_name_str, threshold=threshold)
     result = predictor.predict_latest(raw_df)
 
     if result is None:

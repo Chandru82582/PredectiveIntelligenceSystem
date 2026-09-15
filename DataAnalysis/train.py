@@ -1099,9 +1099,11 @@ def train_lightgbm(feature_table: pd.DataFrame, train_ratio: float = 0.8):
         drop=True
     )
 
-    split_idx = int(len(feature_table) * train_ratio)
-    train_df = feature_table.iloc[:split_idx]
-    test_df = feature_table.iloc[split_idx:]
+    train_cutoff = pd.Timestamp("2013-11-05 23:00:00")  # Nov 1-5 (Training)
+    test_start   = pd.Timestamp("2013-11-06 01:00:00")  # 1-hour buffer (Nov 6-7 Test)
+
+    train_df = df[df["timestamp"] <= train_cutoff]
+    test_df  = df[df["timestamp"] >= test_start]
 
     print("=" * 65)
     print("DATA SPLIT SUMMARY")

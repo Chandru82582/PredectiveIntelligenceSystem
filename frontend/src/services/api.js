@@ -356,8 +356,14 @@ export async function getAvailableModels() {
     } catch (err) {
       console.warn('[api] getAvailableModels fallback:', err.message);
       return {
-        models: ['lgbm_high_activity_v2.joblib', 'lgbm_high_activity_v1.joblib'],
-        default: 'lgbm_high_activity_v2.joblib',
+        models: ['lgbm_high_activity_v3.joblib', 'lgbm_high_activity_v2.joblib', 'lgbm_high_activity_v1.joblib'],
+        default: 'lgbm_high_activity_v3.joblib',
+        default_threshold: 0.7134,
+        thresholds: {
+          'lgbm_high_activity_v3.joblib': 0.7134,
+          'lgbm_high_activity_v2.joblib': 0.7638,
+          'lgbm_high_activity_v1.joblib': 0.7312,
+        },
         meta: { fallback: true },
       };
     }
@@ -365,30 +371,31 @@ export async function getAvailableModels() {
 }
 
 // Next-hour high-activity risk prediction (LightGBM model served by ml/predict.py),
-// supports choosing any model from /ml/models via modelName.
-export async function getGridPrediction(gridId, asOf, modelName) {
-  const key = `predict:${gridId}:${asOf || 'latest'}:${modelName || 'default'}`;
+// supports choosing any model from /ml/models via modelName and custom threshold override.
+export async function getGridPrediction(gridId, asOf, modelName, threshold) {
+  const key = `predict:${gridId}:${asOf || 'latest'}:${modelName || 'default'}:${threshold ?? 'auto'}`;
   return withCache(key, asOf ? null : LIVE_TTL_MS, async () => {
     try {
       const params = {};
       if (asOf) params.as_of = asOf;
       if (modelName) params.model_name = modelName;
+      if (threshold !== undefined && threshold !== null) params.threshold = threshold;
       const data = await request(`/predict/grid/${gridId}`, params);
       return { ...data, meta: { fallback: false } };
     } catch (err) {
       console.warn('[api] getGridPrediction fallback:', err.message);
       const rand = seededRandom(gridId * 13 + 5);
       const probability = Math.min(0.97, Math.max(0.01, rand() * 0.9));
-      const threshold = 0.5;
+      const effectiveThreshold = threshold !== undefined && threshold !== null ? threshold : 0.7134;
       return {
         grid_id: gridId,
         as_of: new Date().toISOString(),
         feature_timestamp: new Date().toISOString(),
         probability,
-        prediction: probability >= threshold ? 1 : 0,
-        risk_label: probability >= threshold ? 'HIGH_ACTIVITY_RISK' : 'NORMAL',
-        threshold,
-        model_name: modelName || 'lgbm_high_activity_v2.joblib',
+        prediction: probability >= effectiveThreshold ? 1 : 0,
+        risk_label: probability >= effectiveThreshold ? 'HIGH_ACTIVITY_RISK' : 'NORMAL',
+        threshold: effectiveThreshold,
+        model_name: modelName || 'lgbm_high_activity_v3.joblib',
         data_points_used: 48,
         features: {
           activity_growth: 0.9 + (rand() - 0.5) * 0.6,

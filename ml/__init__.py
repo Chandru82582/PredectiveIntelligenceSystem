@@ -9,7 +9,15 @@ for p in [str(_ROOT), str(_ML_DIR)]:
         sys.path.insert(0, p)
 
 from ml.preprocessor import DataPreprocessor
-from ml.predict import HighActivityPredictor, get_predictor, list_available_models, DEFAULT_MODEL_NAME
+from ml.predict import (
+    HighActivityPredictor,
+    get_predictor,
+    list_available_models,
+    DEFAULT_MODEL_NAME,
+    DEFAULT_THRESHOLD,
+    get_default_threshold,
+    get_highest_available_model,
+)
 
 __all__ = [
     "DataPreprocessor",
@@ -17,4 +25,7 @@ __all__ = [
     "get_predictor",
     "list_available_models",
     "DEFAULT_MODEL_NAME",
+    "DEFAULT_THRESHOLD",
+    "get_default_threshold",
+    "get_highest_available_model",
 ]
