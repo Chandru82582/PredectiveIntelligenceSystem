@@ -1,7 +1,0 @@
-{
-  "plugins": {
-    "telecom-conventions": {
-      "enabled": true
-    }
-  }
-}

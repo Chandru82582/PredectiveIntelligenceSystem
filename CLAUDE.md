@@ -60,14 +60,9 @@ PredectiveIntelligenceSystem/
 ├── mcp_server/             # Model Context Protocol (MCP) server for external LLM tools
 │   ├── server.py           # FastMCP stdio/SSE server (7 thin wrappers, zero business logic)
 │   ├── test_server.py      # Automated MCP endpoint & tool verification suite
-│   └── README.md           # MCP architecture & Claude Desktop integration guide
-├── .agents/                # Antigravity agent configuration, plugins, skills & hooks
-│   ├── hooks.json          # Lifecycle hook definitions (PreToolUse & PostToolUse)
-│   ├── hooks/              # Hook implementations (pre_edit_guard.py, post_edit_test.py)
-│   ├── logs/               # Audit execution logs (hooks.log)
-│   ├── skills/             # Domain skills (api-review, telecom-data-quality, etc.)
-│   └── plugins/            # Team convention plugins
-│       └── telecom-conventions/ # Packaged conventions, rules, skills, commands & hooks
+├── agent/                  # Multi-agent NOC Copilot system (Supervisor & specialists)
+│   ├── runbooks/           # Domain runbooks (api-review, telecom-data-quality, etc.)
+│   └── slash_commands.py   # Runtime command execution engine
 ├── .claude/                # Claude Code slash command configurations
 │   └── commands/           # /network-health, /check-pipeline, /explain-grid, etc.
 ├── data/                   # Landing data, raw TSV/CSV archives, GeoJSON boundary files
@@ -217,32 +212,13 @@ python mcp_server/test_server.py
 
 ---
 
-## 8. Lifecycle Hooks & Safety Guardrails
+## 8. NOC Runbooks & Slash Commands
 
-Automated Antigravity lifecycle hooks configured in [`.agents/hooks.json`](file:///D:/PredectiveIntelligenceSystem/.agents/hooks.json) protect against pipeline misconfigurations and silent data corruption:
+Diagnostic workflows and operational domain runbooks are maintained within [`agent/runbooks/`](file:///D:/PredectiveIntelligenceSystem/agent/runbooks) and executed either via the web dashboard copilot or Claude Code terminal CLI:
 
-1. **Pre-Edit Airflow & Pipeline Guard (`airflow-pipeline-guard`)**:
-   - Trigger: `PreToolUse` on `replace_file_content` and `write_to_file`.
-   - Implementation: [`.agents/hooks/pre_edit_guard.py`](file:///D:/PredectiveIntelligenceSystem/.agents/hooks/pre_edit_guard.py).
-   - Behavior: Detects edits targeting `flow/airflow_home/`, `flow/sql_ingestion/`, `ingestion_dag.py`, or pipeline configurations. Returns `{"decision": "force_ask"}` to mandate explicit user confirmation prior to modifying pipeline orchestration code. Non-pipeline files return `{"decision": "allow"}`.
-2. **Post-Edit Spark/ML Regression Guard (`spark-ml-regression-guard`)**:
-   - Trigger: `PostToolUse` on `replace_file_content` and `write_to_file`.
-   - Implementation: [`.agents/hooks/post_edit_test.py`](file:///D:/PredectiveIntelligenceSystem/.agents/hooks/post_edit_test.py) using shared checks in [`.agents/hooks/common.py`](file:///D:/PredectiveIntelligenceSystem/.agents/hooks/common.py).
-   - Behavior: Automatically executes two critical tests whenever code under `flow/spark/` or `DataAnalysis/` is modified:
-     - **Analytics Grain Uniqueness Check**: Queries the operational grain `(date, hour, grid_id)` on `hourly_grid_summary` for `MAX(date)` (`2013-11-07`) to verify 0 duplicate records.
-     - **ML2 Feature Leakage Test**: Validates that all lag and rolling window features in `DataAnalysis/preprocessor.py` are strictly backward-looking ($t-1, t-2, \dots$) and contain no target or future-period leakage.
-3. **Execution Audit Logging**:
-   - Every hook execution (timestamp, tool, target path, outcome, pass/fail status) is appended to [`.agents/logs/hooks.log`](file:///D:/PredectiveIntelligenceSystem/.agents/logs/hooks.log).
+### Slash Commands
 
----
-
-## 9. Team Customization Plugin (`telecom-conventions`) & Slash Commands
-
-Project standards, domain guardrails, and diagnostic skills are packaged as an installable plugin in [`.agents/plugins/telecom-conventions/`](file:///D:/PredectiveIntelligenceSystem/.agents/plugins/telecom-conventions/plugin.json).
-
-### Packaged Slash Commands
-
-| Command | Definition File | Primary Skill / Purpose |
+| Command | Definition File | Primary Runbook / Purpose |
 |---|---|---|
 | `/network-health` | [`.claude/commands/network-health.md`](file:///D:/PredectiveIntelligenceSystem/.claude/commands/network-health.md) | Audits grain uniqueness `(date, hour, grid_id)`, spatial bounds (1–10,000), and activity sanity |
 | `/check-pipeline` | [`.claude/commands/check-pipeline.md`](file:///D:/PredectiveIntelligenceSystem/.claude/commands/check-pipeline.md) | Evaluates ETL freshness, ingestion latency, and dead-letter quarantine batches |
@@ -250,9 +226,11 @@ Project standards, domain guardrails, and diagnostic skills are packaged as an i
 | `/review-anomaly` | [`.claude/commands/review-anomaly.md`](file:///D:/PredectiveIntelligenceSystem/.claude/commands/review-anomaly.md) | Investigates active rule alerts and multidimensional statistical deviations |
 | `/test-api` | [`.claude/commands/test-api.md`](file:///D:/PredectiveIntelligenceSystem/.claude/commands/test-api.md) | Executes the backend REST API test suite, validating endpoints and latency contracts |
 
-### Plugin Architecture & Manifest
-- **Manifest**: [`.agents/plugins/telecom-conventions/plugin.json`](file:///D:/PredectiveIntelligenceSystem/.agents/plugins/telecom-conventions/plugin.json) declares rules, skills, slash commands, hooks, and approved MCP server definitions.
-- **Domain Invariant Rules**: Bundles [`.agents/plugins/telecom-conventions/rules/AGENTS.md`](file:///D:/PredectiveIntelligenceSystem/.agents/plugins/telecom-conventions/rules/AGENTS.md) enforcing the non-negotiable terminology safeguard: high activity must never be termed congestion.
-- **MCP Configuration**: Provides [`.agents/plugins/telecom-conventions/mcp_config.json`](file:///D:/PredectiveIntelligenceSystem/.agents/plugins/telecom-conventions/mcp_config.json) for instant IDE/agent binding.
-- **Ownership & Versioning**: Maintained by the Telecom Data Intelligence Platform Team under Semantic Versioning (`MAJOR.MINOR.PATCH`).
+### Operational Runbooks
+The multi-agent NOC system in [`agent/`](file:///D:/PredectiveIntelligenceSystem/agent) dynamically leverages specialized runbooks located in [`agent/runbooks/`](file:///D:/PredectiveIntelligenceSystem/agent/runbooks):
+- `api-review`: Validates backend REST API test suite and latency contracts.
+- `network-anomaly-analysis`: Diagnoses cell volume spikes and anomaly consensus.
+- `pipeline-troubleshooting`: Troubleshoots ETL ingestion staleness and audit log errors.
+- `telecom-data-quality`: Verifies analytics composite grain uniqueness and GeoJSON join integrity.
+
 

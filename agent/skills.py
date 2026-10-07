@@ -8,7 +8,10 @@ logger = logging.getLogger(__name__)
 
 _THIS_DIR = Path(__file__).resolve().parent
 _ROOT = _THIS_DIR.parent if _THIS_DIR.name == "agent" else _THIS_DIR
-_SKILLS_DIR = _ROOT / ".agents" / "skills"
+_SKILLS_DIR = _THIS_DIR / "runbooks"
+if not _SKILLS_DIR.exists():
+    _SKILLS_DIR = _ROOT / ".agents" / "skills"
+
 
 
 def _parse_skill_file(skill_path: Path) -> Optional[Dict[str, Any]]:
